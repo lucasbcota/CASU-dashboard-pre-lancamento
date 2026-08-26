@@ -326,9 +326,10 @@ $('#lg-btn').onclick=login; $('#lg-pass').addEventListener('keydown',e=>{if(e.ke
 $('#logout').onclick=async()=>{await sb.auth.signOut();location.reload();};
 
 async function boot(){ $('#login').style.display='none'; $('#app').style.display='block';
-  const [l,c,cfg]=await Promise.all([sb.from('leads').select('*').order('created_at',{ascending:false}), sb.from('cronograma').select('*').order('data'), sb.from('config').select('*')]);
-  S.leads=(l.data||[]).map(normLead); S.cron=c.data||[]; S.config=Object.fromEntries((cfg.data||[]).map(r=>[r.chave,r.valor]));
+  const [l,c,cfg,ig]=await Promise.all([sb.from('leads').select('*').order('created_at',{ascending:false}), sb.from('cronograma').select('*').order('data'), sb.from('config').select('*'), sb.from('instagram_diario').select('*').order('data')]);
+  S.leads=(l.data||[]).map(normLead); S.cron=c.data||[]; S.config=Object.fromEntries((cfg.data||[]).map(r=>[r.chave,r.valor])); S.igLog=ig.data||[];
   sb.channel('board').on('postgres_changes',{event:'*',schema:'public',table:'leads'},p=>{ if(p.eventType==='INSERT') S.leads.unshift(normLead(p.new)); else if(p.eventType==='UPDATE') S.leads=S.leads.map(x=>x.id===p.new.id?normLead(p.new):x); else S.leads=S.leads.filter(x=>x.id!==p.old.id); if(S.tab==='vip') renderVIP(); })
+    .on('postgres_changes',{event:'*',schema:'public',table:'instagram_diario'},async()=>{ const {data}=await sb.from('instagram_diario').select('*').order('data'); S.igLog=data||[]; if(S.tab==='ig') renderIG(); if(S.tab==='proj') renderProj(); })
     .on('postgres_changes',{event:'*',schema:'public',table:'cronograma'},p=>{ if(p.eventType==='INSERT'){ if(!S.cron.find(x=>x.id===p.new.id)) S.cron.push(p.new);} else if(p.eventType==='UPDATE') S.cron=S.cron.map(x=>x.id===p.new.id?p.new:x); else S.cron=S.cron.filter(x=>x.id!==p.old.id); S.cron.sort((a,b)=>(a.data+(a.hora||'')).localeCompare(b.data+(b.hora||''))); updateCronBadge(); if(S.tab==='cron') renderCron(); }).subscribe();
   updateCronBadge(); setPreset('30'); }
 function normLead(r){ const d=new Date(r.created_at); return {...r,date:iso(d)}; }
@@ -393,13 +394,14 @@ const GLABEL={day:'dia',week:'semana',month:'mês'};
 const METAUI={metric:'spend'};
 const METRICS={spend:['Investimento',true],impressions:['Impressões'],reach:['Alcance'],link_clicks:['Cliques no link'],landing_page_views:['Page views da LP'],follows:['Seguidores'],cadastros:['Cadastros VIP (pago)'],post_engagement:['Engajamento']};
 function findFollowKey(fields){ return (fields||[]).find(f=>/follow/i.test(f)); }
-function normMeta(j){ const fk=findFollowKey(j.fields); return j.data.map(r=>({...r,date:normDate(r.date),follows:fk?(+r[fk]||0):0})); }
+function normMeta(j){ const fk=(j.fields||[]).includes('follows')?'follows':findFollowKey(j.fields); return j.data.map(r=>({...r,date:normDate(r.date),follows:fk?(+r[fk]||0):0})); }
 
 async function loadMeta(){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.from; const key=`${from}|${S.to}`; if(S.meta.key===key) return;
   const st=await api('status'); S.metaStatus=st; if(!st.meta){ S.meta={key,notConnected:true}; return; }
   const range={from,to:S.to}, cur=period();
   const [daily,ag,rg,dv,ads]=await Promise.all([api('meta_daily',range),api('meta_age_gender',cur),api('meta_region',cur),api('meta_device',cur),api('meta_ads',cur)]);
-  S.meta={key,daily:normMeta(daily),age:normMeta(ag),region:normMeta(rg),device:normMeta(dv),ads:normMeta(ads),dropped:daily.dropped,followKey:findFollowKey(daily.fields)}; }
+  S.meta={key,daily:normMeta(daily),age:normMeta(ag),region:normMeta(rg),device:normMeta(dv),ads:normMeta(ads),dropped:daily.dropped,mapping:daily.mapping||{},followKey:findFollowKey(daily.fields)};
+  S.meta.ga4=null; if(st.ga4_lp){ try{ const n=j=>j.data.map(r=>({...r,date:normDate(r.date)})); const [d,src,geo,dev]=await Promise.all([api('ga4_lp_daily',range),api('ga4_lp_source',cur),api('ga4_lp_geo',cur),api('ga4_lp_device',cur)]); S.meta.ga4={daily:n(d),source:n(src),geo:n(geo),device:n(dev),dropped:d.dropped}; }catch(e){ S.meta.ga4={error:e.message}; } } }
 
 function metaTotals(rows,p,leadsPaid){ const f=['spend','impressions','reach','link_clicks','clicks','landing_page_views','follows','post_engagement','post_reactions','comment','post_shares','post_saves','video_views','video_p25_watched_actions','video_p50_watched_actions','video_p75_watched_actions','video_p100_watched_actions','video_thruplay_watched_actions','leads'];
   const t=Object.fromEntries(f.map(k=>[k,sumField(rows,p,k)])); t.cadastros=leadsPaid.filter(l=>inRange(l.date,p)).length;
@@ -453,6 +455,39 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   const formats=Object.values(fmap);
   const vv=t.video_views||0; const funnel=[['Início (3s)',vv],['25%',t.video_p25_watched_actions],['50%',t.video_p50_watched_actions],['75%',t.video_p75_watched_actions],['100%',t.video_p100_watched_actions],['ThruPlay',t.video_thruplay_watched_actions]];
   const dropped=S.meta.dropped||[];
+  // ---- Landing page VIP (GA4) ----
+  const ga=S.meta.ga4; const allLeads=S.leads.map(l=>({date:l.date,cadastros:1}));
+  let lpSection='', lpCharts=null;
+  if(ga&&!ga.error){
+    const gf=['sessions','totalusers','newusers','screenpageviews','engagedsessions'];
+    const G=Object.fromEntries(gf.map(k=>[k,sumField(ga.daily,p,k)])), PG=Object.fromEntries(gf.map(k=>[k,sumField(ga.daily,pv,k)]));
+    const cad=sumField(allLeads,p,'cadastros'), pcad=sumField(allLeads,pv,'cadastros');
+    const conv=G.sessions?cad/G.sessions*100:0, pconv=PG.sessions?pcad/PG.sessions*100:0;
+    const eng=G.sessions?G.engagedsessions/G.sessions*100:0;
+    const ag=aggregate(ga.daily.concat(allLeads),p,g,['sessions','screenpageviews','cadastros']);
+    const srcOf=r=>`${r.sessionsource||'(direto)'} / ${r.sessionmedium||'—'}`;
+    const src=grp(ga.source.filter(r=>inRange(r.date,p)).map(r=>({...r,src:srcOf(r)})),'src','sessions').slice(0,8);
+    const camp=grp(ga.source.filter(r=>inRange(r.date,p)&&r.sessioncampaignname&&!/\(not set\)|\(direct\)|\(organic\)|\(referral\)/.test(r.sessioncampaignname)),'sessioncampaignname','sessions').slice(0,8);
+    const cities=grp(ga.geo.filter(r=>inRange(r.date,p)&&r.city&&r.city!=='(not set)').map(r=>({...r,c:`${r.city}${r.region?' · '+r.region:''}`})),'c','sessions').slice(0,10);
+    const devs=grp(ga.device.filter(r=>inRange(r.date,p)),'devicecategory','sessions');
+    lpCharts={labels:ag.labels,series:ag.series,cities,devs,src,camp};
+    lpSection=`<div class="section-title">Landing page VIP <span>vip.casubrasil.com.br · Google Analytics 4</span></div>
+    <div class="grid kpis">
+      ${kpi('Sessões',num(G.sessions),deltaHTML(G.sessions,PG.sessions))}
+      ${kpi('Page views',num(G.screenpageviews),deltaHTML(G.screenpageviews,PG.screenpageviews))}
+      ${kpi('Usuários',num(G.totalusers),deltaHTML(G.totalusers,PG.totalusers),`<span>· ${num(G.newusers)} novos</span>`)}
+      ${kpi('Cadastros (todos)',num(cad),deltaHTML(cad,pcad))}
+      ${kpi('Conversão da LP',pct(conv),deltaHTML(conv,pconv),`<span>cadastros / sessões</span>`)}
+      ${kpi('Sessões engajadas',pct(eng),deltaHTML(eng,PG.sessions?PG.engagedsessions/PG.sessions*100:0))}
+    </div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card" style="grid-column:1/-1"><h3>Visitas e cadastros por ${GLABEL[g]}</h3><div class="sub">Sessões e page views da LP vs. cadastros reais</div><div class="chart-wrap short"><canvas id="c-lp1"></canvas></div></div>
+      <div class="card"><h3>Cidade</h3><div class="sub">Sessões por cidade</div><div class="bar-list" id="lp-city"></div></div>
+      <div class="card"><h3>Dispositivo</h3><div class="sub">Sessões</div><div class="chart-wrap short"><canvas id="c-lp-dev"></canvas></div></div>
+      <div class="card"><h3>Origem / mídia</h3><div class="sub">De onde vêm as sessões</div><div class="bar-list" id="lp-src"></div></div>
+      <div class="card"><h3>Campanha (UTM)</h3><div class="sub">Sessões por utm_campaign</div><div class="bar-list" id="lp-camp"></div></div>
+    </div>`;
+  } else if(ga&&ga.error){ lpSection=`<div class="section-title">Landing page VIP</div><div class="card"><div class="empty"><b>GA4 da LP não respondeu</b>${esc(ga.error)}</div></div>`; }
   el.innerHTML=`
   <div class="grid kpis">
     ${kpi('Investimento',brl(t.spend),deltaHTML(t.spend,pt.spend),`<span>· ${brl(t.spendDay)}/dia</span>`)}
@@ -460,7 +495,7 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
     ${kpi('Alcance',num(t.reach),deltaHTML(t.reach,pt.reach),`<span>· freq. ${nf1.format(t.freq)}</span>`)}
     ${kpi('Cliques no link',num(t.link_clicks),deltaHTML(t.link_clicks,pt.link_clicks),`<span>· CTR ${pct(t.ctr)}</span>`)}
     ${kpi('CPC',brl(t.cpc),deltaHTML(t.cpc,pt.cpc,true),`<span>· CPM ${brl(t.cpm)}</span>`)}
-    ${kpi('Page views da LP',num(t.landing_page_views),deltaHTML(t.landing_page_views,pt.landing_page_views))}
+    ${kpi('LP views (Meta)',num(t.landing_page_views),deltaHTML(t.landing_page_views,pt.landing_page_views))}
     ${kpi('Cadastros VIP (pago)',num(t.cadastros),deltaHTML(t.cadastros,pt.cadastros),`<span>· conv. LP ${pct(t.lpconv)}</span>`)}
     ${kpi('Custo por cadastro',t.cadastros?brl(t.cpl):'—',deltaHTML(t.cpl,pt.cpl,true))}
     ${kpi('Seguidores do pago',num(t.follows),deltaHTML(t.follows,pt.follows),`<span>· ${t.follows?brl(t.cpf):'—'}/seg.</span>`)}
@@ -487,10 +522,11 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
     </tbody></table></div></div>
     <div class="card"><h3>Investimento por campanha</h3><div class="sub">Participação no período</div><div class="chart-wrap short"><canvas id="c-meta-camp"></canvas></div></div>
   </div>
-  <div class="section-title">Perfil do público alcançado</div>
+  ${lpSection}
+  <div class="section-title">Perfil do público alcançado <span>dados do Meta Ads</span></div>
   <div class="grid cols-3">
     <div class="card"><h3>Idade e gênero</h3><div class="sub">Alcance</div><div class="chart-wrap short"><canvas id="c-meta-age"></canvas></div></div>
-    <div class="card"><h3>Localização</h3><div class="sub">Alcance por região/estado</div><div class="bar-list" id="meta-region"></div></div>
+    <div class="card"><h3>Estado</h3><div class="sub">Alcance por estado (o Meta não abre por cidade — cidade está na seção da LP acima)</div><div class="bar-list" id="meta-region"></div></div>
     <div class="card"><h3>Dispositivo</h3><div class="sub">Impressões</div><div class="chart-wrap short"><canvas id="c-meta-dev"></canvas></div></div>
     <div class="card"><h3>Posicionamento</h3><div class="sub">Impressões por plataforma · posição</div><div class="bar-list" id="meta-pos"></div></div>
     <div class="card"><h3>Cliques por posicionamento</h3><div class="sub">Onde o clique acontece</div><div class="bar-list" id="meta-pos-clicks"></div></div>
@@ -506,7 +542,7 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
       ${adsArr.slice(0,25).map(a=>`<tr><td title="${esc(a.campaign)}">${esc(a.ad)}</td><td><span class="chip ${a.formato[0]==='V'?'wine':'no'}">${a.formato}</span></td><td class="num">${brl(a.spend)}</td><td class="num">${pct(a.ctr)}</td><td class="num">${brl(a.cpc)}</td><td class="num">${num(a.follows)}</td></tr>`).join('')}
     </tbody></table></div></div>
   </div>
-  ${dropped.length?`<div class="note">Campos que o Windsor não reconheceu nesta conta e foram ignorados: ${dropped.join(', ')}${!S.meta.followKey?' · <b>nenhum campo de seguidores encontrado</b> — defina META_FOLLOW_FIELD no Vercel com o nome correto':''}.</div>`:''}`;
+  <div class="note">Campos Meta: ${Object.keys(S.meta.mapping||{}).length?'usando '+Object.entries(S.meta.mapping).map(([k,v])=>`${v} → ${k}`).join(', ')+'. ':''}${dropped.length?`Não encontrados nesta conta (zerados): <b>${dropped.join(', ')}</b>. `:''}${!S.meta.followKey?'<b>Nenhum campo de seguidores aceito</b> — descubra o nome no Windsor e defina META_FOLLOW_FIELD no Vercel.':''}</div>`;
   // gráficos
   const drawMain=()=>{ const m=METAUI.metric, [label,money]=METRICS[m]; const ds=[{label,data:cur.series[m]}]; if(S.cmp) ds.push({label:'Período anterior',data:prev.series[m],type:'line',borderDash:[4,4],color:C.muted,pointRadius:0}); lineBar('c-meta1',cur.labels,ds,{money:!!money}); };
   drawMain(); $('#meta-metric').onclick=e=>{const b=e.target.closest('.pill'); if(!b) return; METAUI.metric=b.dataset.m; $$('#meta-metric .pill').forEach(x=>x.classList.toggle('on',x===b)); drawMain();};
@@ -520,6 +556,8 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   barList($('#meta-pos-clicks'),grp(S.meta.device.map(r=>({...r,pos:posOf(r)})),'pos','link_clicks').slice(0,8));
   barList($('#meta-eng'),[{k:'Engajamento total',v:t.post_engagement},{k:'Reações',v:t.post_reactions},{k:'Comentários',v:t.comment},{k:'Compartilhamentos',v:t.post_shares},{k:'Salvamentos',v:t.post_saves},{k:'Cliques no link',v:t.link_clicks}].filter(x=>x.v>0));
   lineBar('c-meta-video',funnel.map(f=>f[0]),[{label:'% de quem iniciou',data:funnel.map(f=>vv?f[1]/vv*100:0)}]);
+  if(lpCharts){ lineBar('c-lp1',lpCharts.labels,[{label:'Sessões',data:lpCharts.series.sessions},{label:'Page views',data:lpCharts.series.screenpageviews,color:C.sand},{label:'Cadastros',data:lpCharts.series.cadastros,type:'line',color:C.gold}]);
+    barList($('#lp-city'),lpCharts.cities); donut('c-lp-dev',lpCharts.devs.map(d=>d.k),lpCharts.devs.map(d=>d.v)); barList($('#lp-src'),lpCharts.src); barList($('#lp-camp'),lpCharts.camp); }
 }
 
 /* =========================================================
@@ -532,10 +570,16 @@ async function loadIG(){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.from;
   const st=S.metaStatus||await api('status'); S.metaStatus=st; if(!st.ig){ S.ig={key,notConnected:true}; return; }
   const [d,a,m]=await Promise.all([api('ig_daily',{from,to:S.to}),api('ig_audience',period()).catch(()=>({data:[]})),api('ig_media',period()).catch(()=>({data:[]}))]);
   S.ig={key,daily:d.data.map(r=>({...r,date:normDate(r.date)})),audience:a.data,media:m.data.map(r=>({...r,date:normDate(r.date)})),dropped:d.dropped}; }
+/* Registro manual (instagram_diario): série diária de seguidores totais, interpolada entre lançamentos */
+function igSeries(from,to){ const log=[...(S.igLog||[])].sort((a,b)=>a.data.localeCompare(b.data)); if(!log.length) return []; const out=[]; let d=from; const first=log[0], last=log[log.length-1];
+  while(d<=to){ let v=null; if(d<first.data) v=null; else if(d>=last.data) v=last.seguidores; else { const i=log.findIndex(x=>x.data>d); const a=log[i-1], b=log[i]; const n=daysBetween(a.data,b.data)-1, k=daysBetween(a.data,d)-1; v=Math.round(a.seguidores+(b.seguidores-a.seguidores)*k/n); }
+    out.push({date:d,total:v}); d=addDays(d,1); } return out.map((r,i,arr)=>({...r,novos:i>0&&r.total!==null&&arr[i-1].total!==null?r.total-arr[i-1].total:0})); }
+function igOrganicPerDay(p){ const s=igSeries(addDays(p.from,-1),p.to).filter(r=>r.date>=p.from); const tot=s.reduce((a,r)=>a+r.novos,0); const paid=S.metaAll?sumField(S.metaAll,p,'follows'):0; return {total:tot,paid,organic:Math.max(0,tot-paid),perDay:Math.max(0,tot-paid)/Math.max(1,elapsedDays(p))}; }
+
 async function renderIG(){ const el=$('#tab-ig'); el.classList.add('loading'); if(!el.innerHTML) el.innerHTML='<div class="empty">Carregando Instagram…</div>';
   try{ await loadIG(); }catch(e){ el.classList.remove('loading'); el.innerHTML=`<div class="card"><div class="empty"><b>Não consegui falar com o Windsor</b>${esc(e.message)}</div></div>`; return; }
   el.classList.remove('loading');
-  if(S.ig.notConnected){ el.innerHTML=`<div class="card"><div class="empty"><b>Instagram ainda não conectado</b>Esta aba liga sozinha quando o conector estiver pronto. Passo a passo:<div style="text-align:left;max-width:520px;margin:14px auto 0;line-height:1.7">1. No Windsor, em <b>Data sources</b>, conecte <b>Instagram Insights</b> com a conta profissional do @casubrasil (precisa estar vinculada a uma Página do Facebook).<br>2. Copie o ID da conta que aparece em <code>select_accounts</code>.<br>3. No Vercel, adicione a variável <code>IG_ACCOUNT</code> com esse ID e faça um novo deploy.</div></div></div>`; return; }
+  if(S.ig.notConnected){ return renderIGManual(el); }
   const p=period(), pv=prevPeriod(), g=granularity(), rows=S.ig.daily;
   const f=['follower_count','reach','impressions','profile_views','website_clicks']; const T=Object.fromEntries(f.map(k=>[k,sumField(rows,p,k)])), PT=Object.fromEntries(f.map(k=>[k,sumField(rows,pv,k)]));
   const last=[...rows].filter(r=>inRange(r.date,p)&&+r.followers>0).sort((a,b)=>b.date.localeCompare(a.date))[0]; const total=last?+last.followers:0;
@@ -567,6 +611,51 @@ async function renderIG(){ const el=$('#tab-ig'); el.classList.add('loading'); i
   lineBar('c-ig1',cur.labels,ds); lineBar('c-ig2',cur.labels,[{label:'Alcance',data:cur.series.reach},{label:'Impressões',data:cur.series.impressions,color:C.gold}],{type:'line'});
   barList($('#ig-city'),cities); barList($('#ig-ga'),ga.sort((a,b)=>b.v-a.v)); }
 
+function renderIGManual(el){ const p=period(), pv=prevPeriod(), g=granularity(); const log=[...(S.igLog||[])].sort((a,b)=>a.data.localeCompare(b.data));
+  const ser=igSeries(addDays(pv.from,-1),p.to); const inP=ser.filter(r=>inRange(r.date,p)), inPv=ser.filter(r=>inRange(r.date,pv));
+  const gain=inP.reduce((a,r)=>a+r.novos,0), pgain=inPv.reduce((a,r)=>a+r.novos,0); const cur=log.length?log[log.length-1].seguidores:0;
+  const avg=gain/Math.max(1,elapsedDays(p)), pavg=pgain/Math.max(1,elapsedDays(pv)); const tr=trend(inP.map(r=>r.novos));
+  const paid=S.metaAll?sumField(S.metaAll,p,'follows'):null; const organic=paid!==null?Math.max(0,gain-paid):null;
+  const sumLog=(k,pp)=>log.filter(r=>inRange(r.data,pp)&&r[k]!=null).reduce((a,r)=>a+(+r[k]||0),0);
+  const agg=aggregate(inP.map(r=>({date:r.date,novos:r.novos})),p,g,['novos']);
+  const daysToLaunch=Math.max(0,daysBetween(today(),(S.config.datas||{}).publico||'2026-10-06')-1);
+  el.innerHTML=`
+  <div class="grid kpis">
+    ${kpi('Seguidores hoje',num(cur),`<span>último lançamento ${log.length?dmy(log[log.length-1].data):'—'}</span>`)}
+    ${kpi('Ganhos no período',num(gain),deltaHTML(gain,pgain))}
+    ${kpi('Média por dia',nf1.format(avg),deltaHTML(avg,pavg),`<span class="trend ${tr.cls}">· ${tr.txt}</span>`)}
+    ${kpi('Do tráfego pago',paid===null?'—':num(paid),`<span>${paid===null?'abra a aba Meta Ads primeiro':paid>gain*1.2&&gain>0?'<b style="color:var(--bad)">maior que o total — o campo de seguidores do Meta está errado</b>':gain?pct(paid/gain*100)+' dos ganhos':''}</span>`)}
+    ${kpi('Orgânico',organic===null?'—':num(organic),`<span>${organic!==null?nf1.format(organic/Math.max(1,elapsedDays(p)))+'/dia':''}</span>`)}
+    ${kpi('Projeção até o lançamento',num(cur+avg*daysToLaunch),`<span>no ritmo atual · ${daysToLaunch} dias</span>`)}
+    ${kpi('Alcance',sumLog('alcance',p)?num(sumLog('alcance',p)):'—',deltaHTML(sumLog('alcance',p),sumLog('alcance',pv)))}
+    ${kpi('Visitas ao perfil',sumLog('visitas_perfil',p)?num(sumLog('visitas_perfil',p)):'—',deltaHTML(sumLog('visitas_perfil',p),sumLog('visitas_perfil',pv)))}
+  </div>
+  <div class="grid cols-2" style="margin-top:14px">
+    <div class="card"><h3>Seguidores totais</h3><div class="sub">Pontos = lançamentos · entre eles a linha é interpolada</div><div class="chart-wrap short"><canvas id="c-igm1"></canvas></div></div>
+    <div class="card"><h3>Novos seguidores por ${GLABEL[g]}</h3><div class="sub">Derivado dos lançamentos</div><div class="chart-wrap short"><canvas id="c-igm2"></canvas></div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Registro diário</h3><div class="sub">Abra o Instagram → Insights e lance os números do dia. Só "seguidores" é obrigatório; o resto enriquece a aba. Lançar todo dia dá a curva exata; a cada 2–3 dias já funciona.</div></div></div>
+    <div class="proj-input" style="margin-top:10px">
+      <div class="field"><label>Data</label><input type="date" id="ig-d" value="${today()}"></div>
+      <div class="field"><label>Seguidores totais *</label><input type="number" id="ig-s" placeholder="157"></div>
+      <div class="field"><label>Alcance (dia)</label><input type="number" id="ig-a"></div>
+      <div class="field"><label>Impressões (dia)</label><input type="number" id="ig-i"></div>
+      <div class="field"><label>Visitas ao perfil</label><input type="number" id="ig-v"></div>
+      <div class="field"><label>Cliques no link</label><input type="number" id="ig-c"></div>
+      <div class="field"><label>Interações</label><input type="number" id="ig-n"></div>
+      <div class="field"><label>Obs.</label><input id="ig-o"></div>
+    </div><div style="margin-top:12px"><button class="btn sm" id="ig-save">Salvar dia</button></div>
+    <div class="table-wrap" style="margin-top:16px;max-height:320px"><table><thead><tr><th>Data</th><th class="num">Seguidores</th><th class="num">Novos</th><th class="num">Alcance</th><th class="num">Impressões</th><th class="num">Visitas</th><th class="num">Cliques</th><th class="num">Interações</th><th>Obs.</th><th></th></tr></thead><tbody>
+      ${[...log].reverse().map((r,i,arr)=>{const prev=arr[i+1]; return `<tr><td>${dmyy(r.data)}</td><td class="num"><b>${num(r.seguidores)}</b></td><td class="num">${prev?'+'+num(r.seguidores-prev.seguidores)+` <span class="note" style="margin:0">/ ${daysBetween(prev.data,r.data)-1}d</span>`:'—'}</td><td class="num">${r.alcance!=null?num(r.alcance):'—'}</td><td class="num">${r.impressoes!=null?num(r.impressoes):'—'}</td><td class="num">${r.visitas_perfil!=null?num(r.visitas_perfil):'—'}</td><td class="num">${r.cliques_site!=null?num(r.cliques_site):'—'}</td><td class="num">${r.interacoes!=null?num(r.interacoes):'—'}</td><td class="note" style="margin:0">${esc(r.obs||'')}</td><td><button class="icon-btn" data-igdel="${r.data}" title="Excluir">✕</button></td></tr>`}).join('')||'<tr><td colspan="10" class="empty">Nenhum lançamento ainda.</td></tr>'}
+    </tbody></table></div>
+    <div class="note">Quando a API do Instagram estiver ligada, esta aba passa a preencher sozinha e o registro manual vira histórico.</div></div>`;
+  const pts=ser.filter(r=>r.date>=p.from); lineBar('c-igm1',pts.map(r=>dmy(r.date)),[{label:'Seguidores',data:pts.map(r=>r.total),pointRadius:pts.map(r=>log.find(x=>x.data===r.date)?4:0),fill:true,backgroundColor:'rgba(61,31,34,.08)'}],{type:'line'});
+  lineBar('c-igm2',agg.labels,[{label:'Novos',data:agg.series.novos}]);
+  $('#ig-save').onclick=async()=>{ const v=id=>{const x=$('#'+id).value; return x===''?null:+x;}; const rec={data:$('#ig-d').value,seguidores:v('ig-s'),alcance:v('ig-a'),impressoes:v('ig-i'),visitas_perfil:v('ig-v'),cliques_site:v('ig-c'),interacoes:v('ig-n'),obs:$('#ig-o').value.trim()||null};
+    if(!rec.data||rec.seguidores===null) return toast('Data e seguidores são obrigatórios'); const {error}=await sb.from('instagram_diario').upsert(rec); if(error) return toast('Erro: '+error.message); S.igLog=S.igLog.filter(x=>x.data!==rec.data).concat([rec]); toast('Dia salvo'); renderIGManual(el); };
+  el.querySelectorAll('[data-igdel]').forEach(b=>b.onclick=async()=>{ if(!confirm('Excluir o lançamento de '+dmyy(b.dataset.igdel)+'?')) return; const {error}=await sb.from('instagram_diario').delete().eq('data',b.dataset.igdel); if(error) return toast('Erro: '+error.message); S.igLog=S.igLog.filter(x=>x.data!==b.dataset.igdel); renderIGManual(el); });
+}
+
 /* =========================================================
    ABA 4 · Projeções
    ========================================================= */
@@ -583,6 +672,7 @@ async function renderProj(){ const el=$('#tab-proj'); if(!el.innerHTML) el.inner
   const R={follows:rate('follows'),reach:rate('reach'),impressions:rate('impressions'),link_clicks:rate('link_clicks'),landing_page_views:rate('landing_page_views'),cadastros:rate('cadastros'),post_engagement:rate('post_engagement')};
   const orgDay=org.filter(l=>inRange(l.date,baseP)).length/Math.max(1,elapsedDays(baseP));
   let igDay=null; if(S.ig.daily){ const ok=S.ig.daily.filter(r=>inRange(r.date,baseP)); igDay=ok.reduce((s,r)=>s+(+r.follower_count||0),0)/Math.max(1,elapsedDays(baseP)); }
+  else if((S.igLog||[]).length>=2){ igDay=igOrganicPerDay(baseP).perDay; }
   const m=PROJ.scen;
   const rowsP=fases.map(f=>{ const spent=sumField(metaAll,{from:f.inicio,to:f.fim},'spend'); const done={ ...metaTotals(metaAll,{from:f.inicio,to:t<f.fim?t:f.fim},paid) };
     const remainBudget=Math.max(0,f.meta_ads-spent); const daysLeft=f.fim>=t?daysBetween(t>f.inicio?t:f.inicio,f.fim):0; const daysTotal=daysBetween(f.inicio,f.fim);
@@ -602,7 +692,7 @@ async function renderProj(){ const el=$('#tab-proj'); if(!el.innerHTML) el.inner
       ${kpi('Cadastros por R$ 100',nf1.format(R.cadastros*100),`<span>${B.cadastros?brl(B.cpl)+' por cadastro':'—'}</span>`)}
       ${kpi('LP views por R$',nf2.format(R.landing_page_views),`<span>conv. LP ${pct(B.lpconv)}</span>`)}
       ${kpi('Cadastros orgânicos/dia',nf1.format(orgDay),`<span>fora do tráfego pago</span>`)}
-      ${kpi('Seg. orgânicos/dia',igDay===null?'—':nf1.format(igDay),`<span>${igDay===null?'conecte o Instagram':'Instagram Insights'}</span>`)}
+      ${kpi('Seg. orgânicos/dia',igDay===null?'—':nf1.format(igDay),`<span>${igDay===null?'lance seguidores na aba Instagram':S.ig.daily?'Instagram Insights':'registro diário − pagos do Meta'}</span>`)}
     </div></div>
   <div class="section-title">Resultado esperado por fase</div>
   ${rowsP.map(r=>`<div class="card" style="margin-bottom:14px"><div class="card-head"><div><h3>${esc(r.f.nome)}</h3><div class="sub">${dmyy(r.f.inicio)} – ${dmyy(r.f.fim)} · Meta ${brl(r.f.meta_ads)}${r.f.google_ads?` + Google ${brl(r.f.google_ads)}`:''} · ${r.daysLeft} dia(s) restantes</div></div>
