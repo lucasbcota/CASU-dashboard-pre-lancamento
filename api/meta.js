@@ -13,6 +13,11 @@ const clean = v => String(v || '').trim().replace(/^["']+|["']+$/g, '').replace(
 const TOKEN = () => clean(process.env.META_TOKEN || process.env.IG_TOKEN);
 const ACCOUNT = () => { const a = clean(process.env.META_ACCOUNT).replace(/^[a-z0-9_]+__/i, ''); return a ? (a.startsWith('act_') ? a : 'act_' + a) : ''; };
 const cache = new Map(); const TTL = 10 * 60 * 1000;
+// Quais action_types contam como "seguidores" e "visitas ao perfil". Sobrescreva no Vercel se a conta usar outro nome:
+//   META_FOLLOW_TYPES = follow,like        META_VISIT_TYPES = onsite_conversion.ig_profile_visit
+const listEnv = (k, def) => (process.env[k] ? process.env[k].split(',').map(x => x.trim()).filter(Boolean) : def);
+const FOLLOW_RE = new RegExp(listEnv('META_FOLLOW_TYPES', ['follow', '^like$', 'page_like']).join('|'), 'i');
+const VISIT_RE = new RegExp(listEnv('META_VISIT_TYPES', ['profile_visit', 'ig_profile', 'profile_view']).join('|'), 'i');
 
 async function isLoggedIn(req) {
   const auth = req.headers.authorization || ''; if (!auth.startsWith('Bearer ')) return false;
@@ -47,8 +52,8 @@ function normalize(r) {
     video_views: act(a, 'video_view') || first(r.video_play_actions),
     video_p25_watched_actions: first(r.video_p25_watched_actions), video_p50_watched_actions: first(r.video_p50_watched_actions), video_p75_watched_actions: first(r.video_p75_watched_actions), video_p100_watched_actions: first(r.video_p100_watched_actions), video_thruplay_watched_actions: first(r.video_thruplay_watched_actions),
     leads: act(a, 'lead', 'onsite_conversion.lead_grouped', 'offsite_conversion.fb_pixel_lead'),
-    follows: actLike(a, /follow/i),
-    profile_visits: actLike(a, /profile_visit|ig_profile/i),
+    follows: actLike(a, FOLLOW_RE),
+    profile_visits: actLike(a, VISIT_RE),
     page_views_pixel: act(a, 'offsite_conversion.fb_pixel_view_content', 'view_content') ,
     add_to_cart: actLike(a, /add_to_cart/i), initiate_checkout: actLike(a, /initiate_checkout/i), purchases: actLike(a, /purchase/i),
     purchase_value: (r.action_values || []).filter(x => /purchase/i.test(x.action_type)).reduce((s, x) => s + (+x.value || 0), 0),
@@ -81,7 +86,9 @@ module.exports = async (req, res) => {
     }
     else if (q === 'actions') { const rows = await ins({ level: 'account', fields: 'date_start,actions,action_values' }); const tot = {}; rows.forEach(r => Object.entries(r.actions_raw).forEach(([k, v]) => tot[k] = (tot[k] || 0) + v)); data = Object.entries(tot).map(([action_type, value]) => ({ action_type, value })).sort((a, b) => b.value - a.value); }
     else return res.status(400).json({ error: `Consulta desconhecida: ${q}` });
-    const body = { data, fields: FIELDS, dropped: [], mapping: {}, source: 'marketing_api' };
+    const seen = new Set(); data.forEach(r => Object.keys(r.actions_raw || {}).forEach(k => seen.add(k)));
+    const matched = { follows: [...seen].filter(k => FOLLOW_RE.test(k)), profile_visits: [...seen].filter(k => VISIT_RE.test(k)) };
+    const body = { data, fields: FIELDS, dropped: [], mapping: {}, source: 'marketing_api', matched, action_types: [...seen].sort() };
     cache.set(key, { t: Date.now(), body }); res.json(body);
   } catch (e) { res.status(502).json({ error: `Meta: ${e.message}` }); }
 };

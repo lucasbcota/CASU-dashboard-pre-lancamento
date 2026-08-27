@@ -50,13 +50,28 @@ async function dailySeries(id, from, to) {
   // totais por janela (a API só dá o total do intervalo; distribuímos por dia para os gráficos — as somas do período batem)
   for (const metric of [...(imp ? [] : ['views']), 'profile_views', 'website_clicks', 'accounts_engaged', 'total_interactions', 'likes', 'comments', 'shares', 'saves', 'replies']) {
     for (const [a, b] of windows) {
-      try { const j = await gget(`${id}/insights`, { metric, period: 'day', metric_type: 'total_value', since: ts(a), until: ts(addDays(b, 1)) }); const v = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.value; if (v != null) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) ensure(d)[metric] = v / n; } }
+      try { const j = await gget(`${id}/insights`, { metric, period: 'day', metric_type: 'total_value', since: ts(a), until: ts(addDays(b, 1)) }); const v = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.value; if (v != null) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) { const r = ensure(d); if (r[metric] == null) r[metric] = v / n; } } }
       catch (e) { dropped.push({ metric, reason: e.message }); break; }
     }
   }
+  // visitas ao perfil e cliques no link POR DIA (a API só dá total por intervalo → 1 chamada por dia, últimos 30 dias, em paralelo)
+  const today = new Date().toISOString().slice(0, 10); const perDayFrom = addDays(today, -29) > from ? addDays(today, -29) : from;
+  const days = []; for (let d = perDayFrom; d <= to; d = addDays(d, 1)) days.push(d);
+  const perDay = async (metric, extra, apply) => {
+    let failed = false;
+    for (let i = 0; i < days.length; i += 8) {
+      await Promise.all(days.slice(i, i + 8).map(async d => { try { const j = await gget(`${id}/insights`, { metric, period: 'day', metric_type: 'total_value', since: ts(d), until: ts(addDays(d, 1)), ...extra }); apply(d, j); } catch (e) { failed = true; } }));
+      if (failed) break;
+    }
+    return !failed;
+  };
+  await perDay('profile_views', {}, (d, j) => { const v = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.value; if (v != null) ensure(d).profile_views = v; });
+  await perDay('website_clicks', {}, (d, j) => { const v = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.value; if (v != null) ensure(d).website_clicks = v; });
   // cliques nos links do perfil (bio, contato) com breakdown
-  const taps = {}; for (const [a, b] of windows) {
-    try { const j = await gget(`${id}/insights`, { metric: 'profile_links_taps', period: 'day', metric_type: 'total_value', breakdown: 'contact_button_type', since: ts(a), until: ts(addDays(b, 1)) }); const br = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.breakdowns && j.data[0].total_value.breakdowns[0]; (br && br.results || []).forEach(r => { const k = r.dimension_values.join(' '); taps[k] = (taps[k] || 0) + (+r.value || 0); }); const wt = (br && br.results || []).reduce((s, r) => s + (+r.value || 0), 0); if (wt) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) ensure(d).profile_links_taps = wt / n; } }
+  const taps = {};
+  await perDay('profile_links_taps', { breakdown: 'contact_button_type' }, (d, j) => { const br = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.breakdowns && j.data[0].total_value.breakdowns[0]; let tot = 0; (br && br.results || []).forEach(r => { const k = r.dimension_values.join(' '); taps[k] = (taps[k] || 0) + (+r.value || 0); tot += +r.value || 0; }); ensure(d).profile_links_taps = tot; });
+  for (const [a, b] of windows) { if (a >= perDayFrom) continue;
+    try { const j = await gget(`${id}/insights`, { metric: 'profile_links_taps', period: 'day', metric_type: 'total_value', breakdown: 'contact_button_type', since: ts(a), until: ts(addDays(b, 1)) }); const br = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.breakdowns && j.data[0].total_value.breakdowns[0]; const wt = (br && br.results || []).reduce((s, r) => s + (+r.value || 0), 0); if (wt) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) { if (d < perDayFrom) ensure(d).profile_links_taps = wt / n; } } }
     catch (e) { dropped.push({ metric: 'profile_links_taps', reason: e.message }); break; }
   }
   Object.values(rows).forEach(r => { if (r.impressions == null && r.views != null) r.impressions = r.views; });

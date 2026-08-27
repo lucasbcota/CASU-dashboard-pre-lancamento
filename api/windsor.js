@@ -67,7 +67,9 @@ const QUERIES = {
   ga4_lp_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('devicecategory', 'sessions', 'totalusers', 'engagedsessions')] },
   ga4_lp_events: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('eventname', 'eventcount', 'totalusers')] },
 
-  ga4_ecomm_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate', 'itemsviewed', 'addtocarts', 'checkouts', 'ecommercepurchases', 'purchaserevenue')] },
+  // GA4 aceita no máximo 10 métricas por consulta → diário em duas partes (o painel junta por data)
+  ga4_ecomm_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate')] },
+  ga4_ecomm_daily2: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('itemsviewed', 'addtocarts', 'checkouts', 'ecommercepurchases', 'purchaserevenue')] },
   ga4_ecomm_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('sessionsource', 'sessionmedium', 'sessioncampaignname', 'sessions', 'totalusers', 'addtocarts', 'ecommercepurchases', 'purchaserevenue')] },
   ga4_ecomm_geo: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('city', 'region', 'sessions', 'totalusers', 'ecommercepurchases')] },
   ga4_ecomm_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('devicecategory', 'sessions', 'totalusers', 'ecommercepurchases')] },
