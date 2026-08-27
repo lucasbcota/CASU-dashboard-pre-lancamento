@@ -45,9 +45,10 @@ async function dailySeries(id, from, to) {
   };
   await series('follower_count');
   await series('reach');
-  const imp = await series('impressions'); if (!imp) { const ok = await series('views'); if (ok) Object.values(rows).forEach(r => { if (r.views != null && r.impressions == null) r.impressions = r.views; }); }
+  // impressions só existe em contas antigas; nas novas, "views" só vem como total → tratado abaixo
+  const imp = await series('impressions'); if (!imp) dropped.pop();
   // totais por janela (a API só dá o total do intervalo; distribuímos por dia para os gráficos — as somas do período batem)
-  for (const metric of ['profile_views', 'website_clicks', 'accounts_engaged', 'total_interactions', 'likes', 'comments', 'shares', 'saves', 'replies']) {
+  for (const metric of [...(imp ? [] : ['views']), 'profile_views', 'website_clicks', 'accounts_engaged', 'total_interactions', 'likes', 'comments', 'shares', 'saves', 'replies']) {
     for (const [a, b] of windows) {
       try { const j = await gget(`${id}/insights`, { metric, period: 'day', metric_type: 'total_value', since: ts(a), until: ts(addDays(b, 1)) }); const v = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.value; if (v != null) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) ensure(d)[metric] = v / n; } }
       catch (e) { dropped.push({ metric, reason: e.message }); break; }
@@ -58,6 +59,7 @@ async function dailySeries(id, from, to) {
     try { const j = await gget(`${id}/insights`, { metric: 'profile_links_taps', period: 'day', metric_type: 'total_value', breakdown: 'contact_button_type', since: ts(a), until: ts(addDays(b, 1)) }); const br = j.data && j.data[0] && j.data[0].total_value && j.data[0].total_value.breakdowns && j.data[0].total_value.breakdowns[0]; (br && br.results || []).forEach(r => { const k = r.dimension_values.join(' '); taps[k] = (taps[k] || 0) + (+r.value || 0); }); const wt = (br && br.results || []).reduce((s, r) => s + (+r.value || 0), 0); if (wt) { const n = Math.max(1, Math.round((new Date(b) - new Date(a)) / 86400000) + 1); for (let d = a; d <= b; d = addDays(d, 1)) ensure(d).profile_links_taps = wt / n; } }
     catch (e) { dropped.push({ metric: 'profile_links_taps', reason: e.message }); break; }
   }
+  Object.values(rows).forEach(r => { if (r.impressions == null && r.views != null) r.impressions = r.views; });
   return { rows: Object.values(rows).sort((x, y) => x.date.localeCompare(y.date)), dropped, taps };
 }
 
