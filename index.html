@@ -566,10 +566,18 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
 function parseKV(v){ // "São Paulo:120,Belo Horizonte:80" | {a:1} | [{...}]
   if(!v) return []; if(typeof v==='object'&&!Array.isArray(v)) return Object.entries(v).map(([k,x])=>({k,v:+x||0}));
   if(typeof v==='string'){ try{const j=JSON.parse(v); if(j&&typeof j==='object') return parseKV(j);}catch{} return v.split(',').map(s=>{const i=s.lastIndexOf(':');return i>0?{k:s.slice(0,i).trim(),v:+s.slice(i+1)||0}:null}).filter(Boolean); } return []; }
+async function apiIG(q,p){ const {data:{session}}=await sb.auth.getSession(); const r=await fetch(`/api/instagram?q=${q}${p?`&from=${p.from}&to=${p.to}`:''}`,{headers:{Authorization:'Bearer '+session.access_token}}); const j=await r.json(); if(!r.ok){ const e=new Error(j.error||'erro'); e.notConnected=!!j.notConnected; throw e; } return j; }
 async function loadIG(){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.from; const key=`${from}|${S.to}`; if(S.ig.key===key) return;
+  if(S.igGraph===undefined){ try{ S.igGraph=(await apiIG('status')).configured; }catch{ S.igGraph=false; } }
+  if(S.igGraph){ // Graph API direta (Meta for Developers)
+    const [d,a,m]=await Promise.all([apiIG('daily',{from,to:S.to}),apiIG('audience').catch(()=>({data:[]})),apiIG('media',period()).catch(()=>({data:[]}))]);
+    S.ig={key,source:'graph',daily:d.data,audience:a.data,media:m.data,dropped:d.dropped,followersTotal:d.followers_total};
+    // guarda o total de hoje no registro diário (vira histórico permanente)
+    if(d.followers_total){ const t=today(); const cur=(S.igLog||[]).find(x=>x.data===t); if(!cur||cur.seguidores!==d.followers_total){ const r=d.data.find(x=>x.date===t)||{}; sb.from('instagram_diario').upsert({data:t,seguidores:d.followers_total,alcance:r.reach??null,impressoes:r.impressions??null,visitas_perfil:r.profile_views??null,cliques_site:r.website_clicks??null,interacoes:r.total_interactions??null,obs:'automático (API)'}).then(()=>{}); } }
+    return; }
   const st=S.metaStatus||await api('status'); S.metaStatus=st; if(!st.ig){ S.ig={key,notConnected:true}; return; }
   const [d,a,m]=await Promise.all([api('ig_daily',{from,to:S.to}),api('ig_audience',period()).catch(()=>({data:[]})),api('ig_media',period()).catch(()=>({data:[]}))]);
-  S.ig={key,daily:d.data.map(r=>({...r,date:normDate(r.date)})),audience:a.data,media:m.data.map(r=>({...r,date:normDate(r.date)})),dropped:d.dropped}; }
+  S.ig={key,source:'windsor',daily:d.data.map(r=>({...r,date:normDate(r.date)})),audience:a.data,media:m.data.map(r=>({...r,date:normDate(r.date)})),dropped:d.dropped}; }
 /* Registro manual (instagram_diario): série diária de seguidores totais, interpolada entre lançamentos */
 function igSeries(from,to){ const log=[...(S.igLog||[])].sort((a,b)=>a.data.localeCompare(b.data)); if(!log.length) return []; const out=[]; let d=from; const first=log[0], last=log[log.length-1];
   while(d<=to){ let v=null; if(d<first.data) v=null; else if(d>=last.data) v=last.seguidores; else { const i=log.findIndex(x=>x.data>d); const a=log[i-1], b=log[i]; const n=daysBetween(a.data,b.data)-1, k=daysBetween(a.data,d)-1; v=Math.round(a.seguidores+(b.seguidores-a.seguidores)*k/n); }
@@ -582,7 +590,7 @@ async function renderIG(){ const el=$('#tab-ig'); el.classList.add('loading'); i
   if(S.ig.notConnected){ return renderIGManual(el); }
   const p=period(), pv=prevPeriod(), g=granularity(), rows=S.ig.daily;
   const f=['follower_count','reach','impressions','profile_views','website_clicks']; const T=Object.fromEntries(f.map(k=>[k,sumField(rows,p,k)])), PT=Object.fromEntries(f.map(k=>[k,sumField(rows,pv,k)]));
-  const last=[...rows].filter(r=>inRange(r.date,p)&&+r.followers>0).sort((a,b)=>b.date.localeCompare(a.date))[0]; const total=last?+last.followers:0;
+  const last=[...rows].filter(r=>inRange(r.date,p)&&+r.followers>0).sort((a,b)=>b.date.localeCompare(a.date))[0]; const total=S.ig.followersTotal||(last?+last.followers:0);
   const cur=aggregate(rows,p,g,f), prev=aggregate(rows,pv,g,f); const fd=aggregate(rows,p,'day',['follower_count']); const ftr=trend(fd.series.follower_count);
   const engMedia=S.ig.media.filter(m=>inRange(m.date,p)); const eng=engMedia.reduce((s,m)=>s+(+m.like_count||0)+(+m.comments_count||0)+(+m.saved||0)+(+m.shares||0),0);
   const audRow=S.ig.audience[0]||{}; const cities=parseKV(audRow.audience_city).sort((a,b)=>b.v-a.v).slice(0,10); const ga=parseKV(audRow.audience_gender_age);
@@ -606,7 +614,7 @@ async function renderIG(){ const el=$('#tab-ig'); el.classList.add('loading'); i
   <div class="card" style="margin-top:14px"><h3>Posts do período</h3><div class="sub">Ordenados por alcance</div><div class="table-wrap"><table><thead><tr><th>Data</th><th>Tipo</th><th>Legenda</th><th class="num">Alcance</th><th class="num">Curtidas</th><th class="num">Coment.</th><th class="num">Salvos</th><th class="num">Compart.</th><th></th></tr></thead><tbody>
     ${engMedia.sort((a,b)=>(+b.reach||0)-(+a.reach||0)).slice(0,30).map(m=>`<tr><td>${dmyy(m.date)}</td><td><span class="chip no">${esc(m.media_product_type||m.media_type||'')}</span></td><td title="${esc(m.caption)}">${esc(String(m.caption||'').slice(0,60))}</td><td class="num">${num(m.reach)}</td><td class="num">${num(m.like_count)}</td><td class="num">${num(m.comments_count)}</td><td class="num">${num(m.saved)}</td><td class="num">${num(m.shares)}</td><td>${m.permalink?`<a href="${esc(m.permalink)}" target="_blank">abrir</a>`:''}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">Sem posts no período.</td></tr>'}
   </tbody></table></div></div>
-  ${(S.ig.dropped||[]).length?`<div class="note">Campos ignorados pelo Windsor: ${S.ig.dropped.join(', ')}.</div>`:''}`;
+  <div class="note">Fonte: ${S.ig.source==='graph'?'API do Instagram (Meta for Developers)':'Windsor'}${(S.ig.dropped||[]).length?` · métricas não disponíveis para esta conta: ${S.ig.dropped.join(', ')}`:''}. O total de seguidores de hoje é gravado automaticamente no registro diário.</div>`;
   const ds=[{label:'Novos seguidores',data:cur.series.follower_count}]; if(S.cmp) ds.push({label:'Anterior',data:prev.series.follower_count,type:'line',borderDash:[4,4],color:C.muted,pointRadius:0});
   lineBar('c-ig1',cur.labels,ds); lineBar('c-ig2',cur.labels,[{label:'Alcance',data:cur.series.reach},{label:'Impressões',data:cur.series.impressions,color:C.gold}],{type:'line'});
   barList($('#ig-city'),cities); barList($('#ig-ga'),ga.sort((a,b)=>b.v-a.v)); }
