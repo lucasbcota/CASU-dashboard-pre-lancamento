@@ -32,35 +32,48 @@ const M = {
   video_p100_watched_actions: ['video_p100_watched_actions', 'video_p100_watched_actions_video_view'],
   video_thruplay_watched_actions: ['video_thruplay_watched_actions', 'video_thruplay_watched_actions_video_view'],
   leads: ['leads', 'actions_lead'],
+  profile_visits: ['profile_visits', 'actions_onsite_conversion_ig_profile_visit', 'actions_instagram_profile_visit', 'actions_profile_visit'],
   follows: [process.env.META_FOLLOW_FIELD, 'actions_follow', 'follows', 'actions_onsite_conversion_follow', 'instagram_profile_follows', 'actions_like', 'page_likes'].filter(Boolean)
 };
 const m = (...keys) => keys.map(k => M[k]);
+// Aliases de campos do GA4 no Windsor (nome canônico primeiro)
+const GA = {
+  sessions: ['sessions'], totalusers: ['totalusers', 'total_users', 'users'], newusers: ['newusers', 'new_users'],
+  screenpageviews: ['screenpageviews', 'screen_page_views', 'pageviews', 'views'], engagedsessions: ['engagedsessions', 'engaged_sessions'],
+  averagesessionduration: ['averagesessionduration', 'average_session_duration'], userengagementduration: ['userengagementduration', 'user_engagement_duration', 'engagement_duration'],
+  bouncerate: ['bouncerate', 'bounce_rate'], itemsviewed: ['itemsviewed', 'items_viewed', 'item_views', 'view_item'], addtocarts: ['addtocarts', 'add_to_carts', 'add_to_cart'],
+  checkouts: ['checkouts', 'begin_checkouts', 'begin_checkout'], ecommercepurchases: ['ecommercepurchases', 'ecommerce_purchases', 'transactions', 'purchases', 'purchase'],
+  purchaserevenue: ['purchaserevenue', 'purchase_revenue', 'totalrevenue', 'total_revenue', 'revenue'],
+  sessionsource: ['sessionsource', 'session_source', 'source'], sessionmedium: ['sessionmedium', 'session_medium', 'medium'], sessioncampaignname: ['sessioncampaignname', 'session_campaign_name', 'campaign'],
+  city: ['city'], region: ['region'], devicecategory: ['devicecategory', 'device_category', 'device'], eventname: ['eventname', 'event_name'], eventcount: ['eventcount', 'event_count'],
+  pagepath: ['pagepath', 'page_path'], pagetitle: ['pagetitle', 'page_title'], itemname: ['itemname', 'item_name'], itemsaddedtocart: ['itemsaddedtocart', 'items_added_to_cart'],
+  itemspurchased: ['itemspurchased', 'items_purchased'], itemrevenue: ['itemrevenue', 'item_revenue']
+};
+const ga = (...keys) => keys.map(k => GA[k]);
+
 
 const QUERIES = {
   meta_daily: { source: 'facebook', account: 'META_ACCOUNT',
-    fields: ['date', 'campaign', 'campaign_id', ...m('spend', 'impressions', 'reach', 'clicks', 'link_clicks', 'landing_page_views', 'post_engagement', 'post_reactions', 'comment', 'post_shares', 'post_saves', 'video_views', 'video_p25_watched_actions', 'video_p50_watched_actions', 'video_p75_watched_actions', 'video_p100_watched_actions', 'video_thruplay_watched_actions', 'leads', 'follows')] },
+    fields: ['date', 'campaign', 'campaign_id', ...m('spend', 'impressions', 'reach', 'clicks', 'link_clicks', 'landing_page_views', 'post_engagement', 'post_reactions', 'comment', 'post_shares', 'post_saves', 'video_views', 'video_p25_watched_actions', 'video_p50_watched_actions', 'video_p75_watched_actions', 'video_p100_watched_actions', 'video_thruplay_watched_actions', 'leads', 'follows', 'profile_visits')] },
   meta_age_gender: { source: 'facebook', account: 'META_ACCOUNT', fields: ['date', 'age', 'gender', ...m('spend', 'impressions', 'reach', 'link_clicks', 'follows')] },
   meta_region: { source: 'facebook', account: 'META_ACCOUNT', fields: ['date', 'region', ...m('spend', 'impressions', 'reach', 'link_clicks')] },
   meta_device: { source: 'facebook', account: 'META_ACCOUNT', fields: ['date', 'device_platform', 'publisher_platform', 'platform_position', ...m('spend', 'impressions', 'reach', 'link_clicks')] },
   meta_ads: { source: 'facebook', account: 'META_ACCOUNT', fields: ['date', 'campaign', 'adset_name', 'ad_name', ...m('spend', 'impressions', 'reach', 'link_clicks', 'video_views', 'video_thruplay_watched_actions', 'post_engagement', 'follows')] },
 
-  ga4_lp_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP',
-    fields: ['date', 'sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate'] },
-  ga4_lp_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP',
-    fields: ['date', 'sessionsource', 'sessionmedium', 'sessioncampaignname', 'sessions', 'totalusers', 'screenpageviews', 'engagedsessions'] },
-  ga4_lp_geo: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', 'city', 'region', 'sessions', 'totalusers'] },
-  ga4_lp_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', 'devicecategory', 'sessions', 'totalusers', 'engagedsessions'] },
-  ga4_lp_events: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', 'eventname', 'eventcount', 'totalusers'] },
+  ga4_lp_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate')] },
+  ga4_lp_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('sessionsource', 'sessionmedium', 'sessioncampaignname', 'sessions', 'totalusers', 'screenpageviews', 'engagedsessions')] },
+  ga4_lp_geo: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('city', 'region', 'sessions', 'totalusers')] },
+  ga4_lp_geo_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('city', 'sessionsource', 'sessionmedium', 'sessions')] },
+  ga4_lp_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('devicecategory', 'sessions', 'totalusers', 'engagedsessions')] },
+  ga4_lp_events: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_LP_VIP', fields: ['date', ...ga('eventname', 'eventcount', 'totalusers')] },
 
-  ga4_ecomm_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM',
-    fields: ['date', 'sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate', 'itemsviewed', 'addtocarts', 'checkouts', 'ecommercepurchases', 'purchaserevenue', 'transactions', 'totalrevenue'] },
-  ga4_ecomm_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM',
-    fields: ['date', 'sessionsource', 'sessionmedium', 'sessioncampaignname', 'sessions', 'totalusers', 'addtocarts', 'ecommercepurchases', 'purchaserevenue'] },
-  ga4_ecomm_geo: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', 'city', 'region', 'sessions', 'totalusers', 'ecommercepurchases'] },
-  ga4_ecomm_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', 'devicecategory', 'sessions', 'totalusers', 'ecommercepurchases'] },
-  ga4_ecomm_pages: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', 'pagepath', 'pagetitle', 'screenpageviews', 'totalusers', 'userengagementduration'] },
-  ga4_ecomm_items: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', 'itemname', 'itemsviewed', 'itemsaddedtocart', 'itemspurchased', 'itemrevenue'] },
-  ga4_ecomm_events: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', 'eventname', 'eventcount', 'totalusers'] },
+  ga4_ecomm_daily: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('sessions', 'totalusers', 'newusers', 'screenpageviews', 'engagedsessions', 'averagesessionduration', 'userengagementduration', 'bouncerate', 'itemsviewed', 'addtocarts', 'checkouts', 'ecommercepurchases', 'purchaserevenue')] },
+  ga4_ecomm_source: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('sessionsource', 'sessionmedium', 'sessioncampaignname', 'sessions', 'totalusers', 'addtocarts', 'ecommercepurchases', 'purchaserevenue')] },
+  ga4_ecomm_geo: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('city', 'region', 'sessions', 'totalusers', 'ecommercepurchases')] },
+  ga4_ecomm_device: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('devicecategory', 'sessions', 'totalusers', 'ecommercepurchases')] },
+  ga4_ecomm_pages: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('pagepath', 'pagetitle', 'screenpageviews', 'totalusers', 'userengagementduration')] },
+  ga4_ecomm_items: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('itemname', 'itemsviewed', 'itemsaddedtocart', 'itemspurchased', 'itemrevenue')] },
+  ga4_ecomm_events: { source: 'googleanalytics4', account: 'GA4_ACCOUNT_ECOMM', fields: ['date', ...ga('eventname', 'eventcount', 'totalusers')] },
 
   ig_daily: { source: 'instagram', account: 'IG_ACCOUNT', fields: ['date', 'follower_count', 'followers', 'reach', 'impressions', 'profile_views', 'website_clicks'] },
   ig_audience: { source: 'instagram', account: 'IG_ACCOUNT', fields: ['audience_city', 'audience_gender_age', 'audience_country', 'follower_count'] },
