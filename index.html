@@ -205,6 +205,7 @@ td .icon-btn:hover{background:var(--wine-soft);color:var(--wine)}
         <button class="tab active" data-tab="vip">Lista VIP</button>
         <button class="tab" data-tab="meta">Meta Ads</button>
         <button class="tab" data-tab="ig">Instagram</button>
+        <button class="tab" data-tab="ga">Analytics</button>
         <button class="tab" data-tab="proj">Projeções</button>
         <button class="tab" data-tab="cron">Cronograma <span class="badge" id="cron-badge"></span></button>
       </nav>
@@ -226,6 +227,7 @@ td .icon-btn:hover{background:var(--wine-soft);color:var(--wine)}
     <section id="tab-vip"></section>
     <section id="tab-meta" class="hidden"></section>
     <section id="tab-ig" class="hidden"></section>
+    <section id="tab-ga" class="hidden"></section>
     <section id="tab-proj" class="hidden"></section>
     <section id="tab-cron" class="hidden"></section>
   </main>
@@ -315,9 +317,9 @@ $('#f-to').addEventListener('change',e=>{S.to=e.target.value;S.preset='';syncFil
 $('#f-cmp').addEventListener('change',e=>{S.cmp=e.target.checked;syncFilterUI();refresh();});
 
 /* ---------- abas ---------- */
-$('#tabs').addEventListener('click',e=>{const b=e.target.closest('.tab'); if(!b) return; S.tab=b.dataset.tab; $$('.tab').forEach(t=>t.classList.toggle('active',t===b)); ['vip','meta','ig','proj','cron'].forEach(t=>$('#tab-'+t).classList.toggle('hidden',t!==S.tab)); $('#filters').classList.toggle('hidden',S.tab==='cron'||S.tab==='proj'); refresh(); });
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('.tab'); if(!b) return; S.tab=b.dataset.tab; $$('.tab').forEach(t=>t.classList.toggle('active',t===b)); ['vip','meta','ig','ga','proj','cron'].forEach(t=>$('#tab-'+t).classList.toggle('hidden',t!==S.tab)); $('#filters').classList.toggle('hidden',S.tab==='cron'||S.tab==='proj'); refresh(); });
 
-async function refresh(){ const r={vip:renderVIP,meta:renderMeta,ig:renderIG,proj:renderProj,cron:renderCron}[S.tab]; try{ await r(); }catch(e){ console.error(e); toast('Erro: '+e.message); } }
+async function refresh(){ const r={vip:renderVIP,meta:renderMeta,ig:renderIG,ga:renderGA,proj:renderProj,cron:renderCron}[S.tab]; try{ await r(); }catch(e){ console.error(e); toast('Erro: '+e.message); } }
 
 /* ---------- auth ---------- */
 async function login(){ const email=$('#lg-email').value.trim(), password=$('#lg-pass').value; $('#lg-err').textContent=''; $('#lg-btn').disabled=true;
@@ -401,7 +403,7 @@ async function loadMeta(){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.fro
   const range={from,to:S.to}, cur=period();
   const [daily,ag,rg,dv,ads]=await Promise.all([api('meta_daily',range),api('meta_age_gender',cur),api('meta_region',cur),api('meta_device',cur),api('meta_ads',cur)]);
   S.meta={key,daily:normMeta(daily),age:normMeta(ag),region:normMeta(rg),device:normMeta(dv),ads:normMeta(ads),dropped:daily.dropped,mapping:daily.mapping||{},followKey:findFollowKey(daily.fields)};
-  S.meta.ga4=null; if(st.ga4_lp){ try{ const n=j=>j.data.map(r=>({...r,date:normDate(r.date)})); const [d,src,geo,dev]=await Promise.all([api('ga4_lp_daily',range),api('ga4_lp_source',cur),api('ga4_lp_geo',cur),api('ga4_lp_device',cur)]); S.meta.ga4={daily:n(d),source:n(src),geo:n(geo),device:n(dev),dropped:d.dropped}; }catch(e){ S.meta.ga4={error:e.message}; } } }
+}
 
 function metaTotals(rows,p,leadsPaid){ const f=['spend','impressions','reach','link_clicks','clicks','landing_page_views','follows','post_engagement','post_reactions','comment','post_shares','post_saves','video_views','video_p25_watched_actions','video_p50_watched_actions','video_p75_watched_actions','video_p100_watched_actions','video_thruplay_watched_actions','leads'];
   const t=Object.fromEntries(f.map(k=>[k,sumField(rows,p,k)])); t.cadastros=leadsPaid.filter(l=>inRange(l.date,p)).length;
@@ -455,39 +457,6 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   const formats=Object.values(fmap);
   const vv=t.video_views||0; const funnel=[['Início (3s)',vv],['25%',t.video_p25_watched_actions],['50%',t.video_p50_watched_actions],['75%',t.video_p75_watched_actions],['100%',t.video_p100_watched_actions],['ThruPlay',t.video_thruplay_watched_actions]];
   const dropped=S.meta.dropped||[];
-  // ---- Landing page VIP (GA4) ----
-  const ga=S.meta.ga4; const allLeads=S.leads.map(l=>({date:l.date,cadastros:1}));
-  let lpSection='', lpCharts=null;
-  if(ga&&!ga.error){
-    const gf=['sessions','totalusers','newusers','screenpageviews','engagedsessions'];
-    const G=Object.fromEntries(gf.map(k=>[k,sumField(ga.daily,p,k)])), PG=Object.fromEntries(gf.map(k=>[k,sumField(ga.daily,pv,k)]));
-    const cad=sumField(allLeads,p,'cadastros'), pcad=sumField(allLeads,pv,'cadastros');
-    const conv=G.sessions?cad/G.sessions*100:0, pconv=PG.sessions?pcad/PG.sessions*100:0;
-    const eng=G.sessions?G.engagedsessions/G.sessions*100:0;
-    const ag=aggregate(ga.daily.concat(allLeads),p,g,['sessions','screenpageviews','cadastros']);
-    const srcOf=r=>`${r.sessionsource||'(direto)'} / ${r.sessionmedium||'—'}`;
-    const src=grp(ga.source.filter(r=>inRange(r.date,p)).map(r=>({...r,src:srcOf(r)})),'src','sessions').slice(0,8);
-    const camp=grp(ga.source.filter(r=>inRange(r.date,p)&&r.sessioncampaignname&&!/\(not set\)|\(direct\)|\(organic\)|\(referral\)/.test(r.sessioncampaignname)),'sessioncampaignname','sessions').slice(0,8);
-    const cities=grp(ga.geo.filter(r=>inRange(r.date,p)&&r.city&&r.city!=='(not set)').map(r=>({...r,c:`${r.city}${r.region?' · '+r.region:''}`})),'c','sessions').slice(0,10);
-    const devs=grp(ga.device.filter(r=>inRange(r.date,p)),'devicecategory','sessions');
-    lpCharts={labels:ag.labels,series:ag.series,cities,devs,src,camp};
-    lpSection=`<div class="section-title">Landing page VIP <span>vip.casubrasil.com.br · Google Analytics 4</span></div>
-    <div class="grid kpis">
-      ${kpi('Sessões',num(G.sessions),deltaHTML(G.sessions,PG.sessions))}
-      ${kpi('Page views',num(G.screenpageviews),deltaHTML(G.screenpageviews,PG.screenpageviews))}
-      ${kpi('Usuários',num(G.totalusers),deltaHTML(G.totalusers,PG.totalusers),`<span>· ${num(G.newusers)} novos</span>`)}
-      ${kpi('Cadastros (todos)',num(cad),deltaHTML(cad,pcad))}
-      ${kpi('Conversão da LP',pct(conv),deltaHTML(conv,pconv),`<span>cadastros / sessões</span>`)}
-      ${kpi('Sessões engajadas',pct(eng),deltaHTML(eng,PG.sessions?PG.engagedsessions/PG.sessions*100:0))}
-    </div>
-    <div class="grid cols-2" style="margin-top:14px">
-      <div class="card" style="grid-column:1/-1"><h3>Visitas e cadastros por ${GLABEL[g]}</h3><div class="sub">Sessões e page views da LP vs. cadastros reais</div><div class="chart-wrap short"><canvas id="c-lp1"></canvas></div></div>
-      <div class="card"><h3>Cidade</h3><div class="sub">Sessões por cidade</div><div class="bar-list" id="lp-city"></div></div>
-      <div class="card"><h3>Dispositivo</h3><div class="sub">Sessões</div><div class="chart-wrap short"><canvas id="c-lp-dev"></canvas></div></div>
-      <div class="card"><h3>Origem / mídia</h3><div class="sub">De onde vêm as sessões</div><div class="bar-list" id="lp-src"></div></div>
-      <div class="card"><h3>Campanha (UTM)</h3><div class="sub">Sessões por utm_campaign</div><div class="bar-list" id="lp-camp"></div></div>
-    </div>`;
-  } else if(ga&&ga.error){ lpSection=`<div class="section-title">Landing page VIP</div><div class="card"><div class="empty"><b>GA4 da LP não respondeu</b>${esc(ga.error)}</div></div>`; }
   el.innerHTML=`
   <div class="grid kpis">
     ${kpi('Investimento',brl(t.spend),deltaHTML(t.spend,pt.spend),`<span>· ${brl(t.spendDay)}/dia</span>`)}
@@ -522,11 +491,10 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
     </tbody></table></div></div>
     <div class="card"><h3>Investimento por campanha</h3><div class="sub">Participação no período</div><div class="chart-wrap short"><canvas id="c-meta-camp"></canvas></div></div>
   </div>
-  ${lpSection}
   <div class="section-title">Perfil do público alcançado <span>dados do Meta Ads</span></div>
   <div class="grid cols-3">
     <div class="card"><h3>Idade e gênero</h3><div class="sub">Alcance</div><div class="chart-wrap short"><canvas id="c-meta-age"></canvas></div></div>
-    <div class="card"><h3>Estado</h3><div class="sub">Alcance por estado (o Meta não abre por cidade — cidade está na seção da LP acima)</div><div class="bar-list" id="meta-region"></div></div>
+    <div class="card"><h3>Estado</h3><div class="sub">Alcance por estado (o Meta não abre por cidade — cidade está na aba Analytics)</div><div class="bar-list" id="meta-region"></div></div>
     <div class="card"><h3>Dispositivo</h3><div class="sub">Impressões</div><div class="chart-wrap short"><canvas id="c-meta-dev"></canvas></div></div>
     <div class="card"><h3>Posicionamento</h3><div class="sub">Impressões por plataforma · posição</div><div class="bar-list" id="meta-pos"></div></div>
     <div class="card"><h3>Cliques por posicionamento</h3><div class="sub">Onde o clique acontece</div><div class="bar-list" id="meta-pos-clicks"></div></div>
@@ -556,8 +524,6 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   barList($('#meta-pos-clicks'),grp(S.meta.device.map(r=>({...r,pos:posOf(r)})),'pos','link_clicks').slice(0,8));
   barList($('#meta-eng'),[{k:'Engajamento total',v:t.post_engagement},{k:'Reações',v:t.post_reactions},{k:'Comentários',v:t.comment},{k:'Compartilhamentos',v:t.post_shares},{k:'Salvamentos',v:t.post_saves},{k:'Cliques no link',v:t.link_clicks}].filter(x=>x.v>0));
   lineBar('c-meta-video',funnel.map(f=>f[0]),[{label:'% de quem iniciou',data:funnel.map(f=>vv?f[1]/vv*100:0)}]);
-  if(lpCharts){ lineBar('c-lp1',lpCharts.labels,[{label:'Sessões',data:lpCharts.series.sessions},{label:'Page views',data:lpCharts.series.screenpageviews,color:C.sand},{label:'Cadastros',data:lpCharts.series.cadastros,type:'line',color:C.gold}]);
-    barList($('#lp-city'),lpCharts.cities); donut('c-lp-dev',lpCharts.devs.map(d=>d.k),lpCharts.devs.map(d=>d.v)); barList($('#lp-src'),lpCharts.src); barList($('#lp-camp'),lpCharts.camp); }
 }
 
 /* =========================================================
@@ -568,16 +534,17 @@ function parseKV(v){ // "São Paulo:120,Belo Horizonte:80" | {a:1} | [{...}]
   if(typeof v==='string'){ try{const j=JSON.parse(v); if(j&&typeof j==='object') return parseKV(j);}catch{} return v.split(',').map(s=>{const i=s.lastIndexOf(':');return i>0?{k:s.slice(0,i).trim(),v:+s.slice(i+1)||0}:null}).filter(Boolean); } return []; }
 async function apiIG(q,p){ const {data:{session}}=await sb.auth.getSession(); const r=await fetch(`/api/instagram?q=${q}${p?`&from=${p.from}&to=${p.to}`:''}`,{headers:{Authorization:'Bearer '+session.access_token}}); const j=await r.json(); if(!r.ok){ const e=new Error(j.error||'erro'); e.notConnected=!!j.notConnected; throw e; } return j; }
 async function loadIG(){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.from; const key=`${from}|${S.to}`; if(S.ig.key===key) return;
-  if(S.igGraph===undefined){ try{ S.igGraph=(await apiIG('status')).configured; }catch{ S.igGraph=false; } }
-  if(S.igGraph){ // Graph API direta (Meta for Developers)
+  if(S.igGraph===undefined){ try{ const st=await apiIG('status'); S.igGraph=!!st.configured; S.igWhy=st.configured?'':'o proxy respondeu que IG_TOKEN ou IG_USER_ID não estão configurados no Vercel'; }catch(e){ S.igGraph=false; S.igWhy='erro ao chamar /api/instagram: '+e.message; } }
+  if(S.igGraph){ try{ await loadIGGraph(from,key); return; }catch(e){ S.igGraph=false; S.igWhy='a API do Instagram respondeu com erro: '+e.message; } }
+  const st=S.metaStatus||await api('status'); S.metaStatus=st; if(!st.ig){ S.ig={key,notConnected:true}; return; }
+  const [d,a,m]=await Promise.all([api('ig_daily',{from,to:S.to}),api('ig_audience',period()).catch(()=>({data:[]})),api('ig_media',period()).catch(()=>({data:[]}))]);
+  S.ig={key,source:'windsor',daily:d.data.map(r=>({...r,date:normDate(r.date)})),audience:a.data,media:m.data.map(r=>({...r,date:normDate(r.date)})),dropped:d.dropped}; }
+async function loadIGGraph(from,key){ // Graph API direta (Meta for Developers)
     const [d,a,m]=await Promise.all([apiIG('daily',{from,to:S.to}),apiIG('audience').catch(()=>({data:[]})),apiIG('media',period()).catch(()=>({data:[]}))]);
     S.ig={key,source:'graph',daily:d.data,audience:a.data,media:m.data,dropped:d.dropped,followersTotal:d.followers_total};
     // guarda o total de hoje no registro diário (vira histórico permanente)
     if(d.followers_total){ const t=today(); const cur=(S.igLog||[]).find(x=>x.data===t); if(!cur||cur.seguidores!==d.followers_total){ const r=d.data.find(x=>x.date===t)||{}; sb.from('instagram_diario').upsert({data:t,seguidores:d.followers_total,alcance:r.reach??null,impressoes:r.impressions??null,visitas_perfil:r.profile_views??null,cliques_site:r.website_clicks??null,interacoes:r.total_interactions??null,obs:'automático (API)'}).then(()=>{}); } }
-    return; }
-  const st=S.metaStatus||await api('status'); S.metaStatus=st; if(!st.ig){ S.ig={key,notConnected:true}; return; }
-  const [d,a,m]=await Promise.all([api('ig_daily',{from,to:S.to}),api('ig_audience',period()).catch(()=>({data:[]})),api('ig_media',period()).catch(()=>({data:[]}))]);
-  S.ig={key,source:'windsor',daily:d.data.map(r=>({...r,date:normDate(r.date)})),audience:a.data,media:m.data.map(r=>({...r,date:normDate(r.date)})),dropped:d.dropped}; }
+    }
 /* Registro manual (instagram_diario): série diária de seguidores totais, interpolada entre lançamentos */
 function igSeries(from,to){ const log=[...(S.igLog||[])].sort((a,b)=>a.data.localeCompare(b.data)); if(!log.length) return []; const out=[]; let d=from; const first=log[0], last=log[log.length-1];
   while(d<=to){ let v=null; if(d<first.data) v=null; else if(d>=last.data) v=last.seguidores; else { const i=log.findIndex(x=>x.data>d); const a=log[i-1], b=log[i]; const n=daysBetween(a.data,b.data)-1, k=daysBetween(a.data,d)-1; v=Math.round(a.seguidores+(b.seguidores-a.seguidores)*k/n); }
@@ -628,6 +595,7 @@ function renderIGManual(el){ const p=period(), pv=prevPeriod(), g=granularity();
   const agg=aggregate(inP.map(r=>({date:r.date,novos:r.novos})),p,g,['novos']);
   const daysToLaunch=Math.max(0,daysBetween(today(),(S.config.datas||{}).publico||'2026-10-06')-1);
   el.innerHTML=`
+  <div class="ins ${S.igWhy?'warn':'info'}" style="margin-bottom:14px"><i></i><div><b>API do Instagram não está em uso:</b> ${esc(S.igWhy||'ainda não configurada')}. Enquanto isso, a aba funciona pelo registro manual. <a href="#" id="ig-retry">Tentar de novo</a></div></div>
   <div class="grid kpis">
     ${kpi('Seguidores hoje',num(cur),`<span>último lançamento ${log.length?dmy(log[log.length-1].data):'—'}</span>`)}
     ${kpi('Ganhos no período',num(gain),deltaHTML(gain,pgain))}
@@ -657,12 +625,113 @@ function renderIGManual(el){ const p=period(), pv=prevPeriod(), g=granularity();
       ${[...log].reverse().map((r,i,arr)=>{const prev=arr[i+1]; return `<tr><td>${dmyy(r.data)}</td><td class="num"><b>${num(r.seguidores)}</b></td><td class="num">${prev?'+'+num(r.seguidores-prev.seguidores)+` <span class="note" style="margin:0">/ ${daysBetween(prev.data,r.data)-1}d</span>`:'—'}</td><td class="num">${r.alcance!=null?num(r.alcance):'—'}</td><td class="num">${r.impressoes!=null?num(r.impressoes):'—'}</td><td class="num">${r.visitas_perfil!=null?num(r.visitas_perfil):'—'}</td><td class="num">${r.cliques_site!=null?num(r.cliques_site):'—'}</td><td class="num">${r.interacoes!=null?num(r.interacoes):'—'}</td><td class="note" style="margin:0">${esc(r.obs||'')}</td><td><button class="icon-btn" data-igdel="${r.data}" title="Excluir">✕</button></td></tr>`}).join('')||'<tr><td colspan="10" class="empty">Nenhum lançamento ainda.</td></tr>'}
     </tbody></table></div>
     <div class="note">Quando a API do Instagram estiver ligada, esta aba passa a preencher sozinha e o registro manual vira histórico.</div></div>`;
+  $('#ig-retry').onclick=e=>{e.preventDefault();S.igGraph=undefined;S.ig={};renderIG();};
   const pts=ser.filter(r=>r.date>=p.from); lineBar('c-igm1',pts.map(r=>dmy(r.date)),[{label:'Seguidores',data:pts.map(r=>r.total),pointRadius:pts.map(r=>log.find(x=>x.data===r.date)?4:0),fill:true,backgroundColor:'rgba(61,31,34,.08)'}],{type:'line'});
   lineBar('c-igm2',agg.labels,[{label:'Novos',data:agg.series.novos}]);
   $('#ig-save').onclick=async()=>{ const v=id=>{const x=$('#'+id).value; return x===''?null:+x;}; const rec={data:$('#ig-d').value,seguidores:v('ig-s'),alcance:v('ig-a'),impressoes:v('ig-i'),visitas_perfil:v('ig-v'),cliques_site:v('ig-c'),interacoes:v('ig-n'),obs:$('#ig-o').value.trim()||null};
     if(!rec.data||rec.seguidores===null) return toast('Data e seguidores são obrigatórios'); const {error}=await sb.from('instagram_diario').upsert(rec); if(error) return toast('Erro: '+error.message); S.igLog=S.igLog.filter(x=>x.data!==rec.data).concat([rec]); toast('Dia salvo'); renderIGManual(el); };
   el.querySelectorAll('[data-igdel]').forEach(b=>b.onclick=async()=>{ if(!confirm('Excluir o lançamento de '+dmyy(b.dataset.igdel)+'?')) return; const {error}=await sb.from('instagram_diario').delete().eq('data',b.dataset.igdel); if(error) return toast('Erro: '+error.message); S.igLog=S.igLog.filter(x=>x.data!==b.dataset.igdel); renderIGManual(el); });
 }
+
+
+/* =========================================================
+   ABA · Analytics (GA4) — LP VIP e E-commerce
+   ========================================================= */
+const GAUI={view:'lp'};
+const fmtDur=sec=>{ sec=Math.round(sec||0); return sec>=60?`${Math.floor(sec/60)}m ${pad(sec%60)}s`:`${sec}s`; };
+const grpBy=(arr,key,f)=>{const m={};arr.forEach(r=>{const k=r[key]||'—';m[k]=(m[k]||0)+(+r[f]||0)});return Object.entries(m).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v);};
+const nd=j=>j.data.map(r=>({...r,date:normDate(r.date)}));
+async function loadGA(view){ const pv=prevPeriod(); const from=S.cmp?pv.from:S.from; const key=`${view}|${from}|${S.to}`; S.ga=S.ga||{}; if(S.ga[key]) return S.ga[key];
+  const st=S.metaStatus||await api('status'); S.metaStatus=st;
+  const range={from,to:S.to}, cur=period(); const pre=view==='lp'?'ga4_lp_':'ga4_ecomm_';
+  if(!(view==='lp'?st.ga4_lp:st.ga4_ecomm)){ S.ga[key]={notConnected:true}; return S.ga[key]; }
+  const opt=q=>api(pre+q,cur).then(nd).catch(()=>[]);
+  const d=await api(pre+'daily',range);
+  const [source,geo,device,events,pages,items]=await Promise.all([opt('source'),opt('geo'),opt('device'),opt('events'),view==='ecomm'?opt('pages'):[],view==='ecomm'?opt('items'):[]]);
+  S.ga[key]={daily:nd(d),source,geo,device,events,pages,items,dropped:d.dropped||[]}; return S.ga[key]; }
+
+async function renderGA(){ const el=$('#tab-ga'); el.classList.add('loading'); if(!el.innerHTML) el.innerHTML='<div class="empty">Carregando Analytics…</div>';
+  const head=`<div class="tools" style="margin-bottom:14px"><div class="seg" id="ga-view"><button data-v="lp" class="${GAUI.view==='lp'?'on':''}">Landing page VIP</button><button data-v="ecomm" class="${GAUI.view==='ecomm'?'on':''}">E-commerce</button></div><span class="note" style="margin:0">${GAUI.view==='lp'?'vip.casubrasil.com.br':'casubrasil.com.br'} · Google Analytics 4</span></div>`;
+  let ga; try{ ga=await loadGA(GAUI.view); }catch(e){ el.classList.remove('loading'); el.innerHTML=head+`<div class="card"><div class="empty"><b>GA4 não respondeu</b>${esc(e.message)}</div></div>`; bindGAView(); return; }
+  el.classList.remove('loading');
+  if(ga.notConnected){ el.innerHTML=head+`<div class="card"><div class="empty"><b>Propriedade não configurada</b>Adicione no Vercel a variável <code>${GAUI.view==='lp'?'GA4_ACCOUNT_LP_VIP':'GA4_ACCOUNT_ECOMM'}</code> e faça um redeploy.</div></div>`; bindGAView(); return; }
+  const p=period(), pv=prevPeriod(), g=granularity(); const D=ga.daily;
+  const T=k=>sumField(D,p,k), PT=k=>sumField(D,pv,k);
+  const engT=T('userengagementduration'), engS=T('sessions'); const avgEng=engS?engT/engS:0, pAvgEng=PT('sessions')?PT('userengagementduration')/PT('sessions'):0;
+  const srcOf=r=>`${r.sessionsource||'(direto)'} / ${r.sessionmedium||'—'}`;
+  const inP=arr=>arr.filter(r=>inRange(r.date,p));
+  const cities=grpBy(inP(ga.geo).filter(r=>r.city&&r.city!=='(not set)').map(r=>({...r,c:`${r.city}${r.region?' · '+r.region:''}`})),'c','sessions').slice(0,10);
+  const devs=grpBy(inP(ga.device),'devicecategory','sessions');
+  const events=grpBy(inP(ga.events),'eventname','eventcount').slice(0,12);
+  const dropped=ga.dropped.length?`<div class="note">Métricas que o GA4/Windsor não devolveu para esta propriedade (zeradas): ${ga.dropped.join(', ')}.</div>`:'';
+  if(GAUI.view==='lp'){
+    const allLeads=S.leads.map(l=>({date:l.date,cadastros:1,src:`${(l.utm_source||'(direto)').toLowerCase()} / ${(l.utm_medium||'—').toLowerCase()}`}));
+    const cad=sumField(allLeads,p,'cadastros'), pcad=sumField(allLeads,pv,'cadastros'); const conv=engS?cad/engS*100:0, pconv=PT('sessions')?pcad/PT('sessions')*100:0;
+    const ag=aggregate(D.concat(allLeads),p,g,['sessions','screenpageviews','cadastros']);
+    const bySrc={}; inP(ga.source).forEach(r=>{const k=srcOf(r).toLowerCase(); const o=bySrc[k]=bySrc[k]||{k,sessions:0,users:0,cad:0}; o.sessions+=+r.sessions||0; o.users+=+r.totalusers||0;});
+    allLeads.filter(l=>inRange(l.date,p)).forEach(l=>{const o=bySrc[l.src]=bySrc[l.src]||{k:l.src,sessions:0,users:0,cad:0}; o.cad++;});
+    const srcRows=Object.values(bySrc).sort((a,b)=>b.sessions-a.sessions).slice(0,12);
+    const camp=grpBy(inP(ga.source).filter(r=>r.sessioncampaignname&&!/^\((not set|direct|organic|referral)\)$/.test(r.sessioncampaignname)),'sessioncampaignname','sessions').slice(0,8);
+    const leadEvt=events.find(e=>/lead|form|cadastro|submit|sign/i.test(e.k));
+    el.innerHTML=head+`
+    <div class="grid kpis">
+      ${kpi('Sessões',num(engS),deltaHTML(engS,PT('sessions')))}
+      ${kpi('Page views',num(T('screenpageviews')),deltaHTML(T('screenpageviews'),PT('screenpageviews')))}
+      ${kpi('Usuários',num(T('totalusers')),deltaHTML(T('totalusers'),PT('totalusers')),`<span>· ${num(T('newusers'))} novos</span>`)}
+      ${kpi('Tempo de engajamento',fmtDur(avgEng),deltaHTML(avgEng,pAvgEng),`<span>por sessão</span>`)}
+      ${kpi('Sessões engajadas',pct(engS?T('engagedsessions')/engS*100:0),deltaHTML(engS?T('engagedsessions')/engS*100:0,PT('sessions')?PT('engagedsessions')/PT('sessions')*100:0))}
+      ${kpi('Cadastros (Lista VIP)',num(cad),deltaHTML(cad,pcad),`<span>fonte: Supabase</span>`)}
+      ${kpi('Conversão da LP',pct(conv),deltaHTML(conv,pconv),`<span>cadastros / sessões</span>`)}
+      ${kpi('Evento de lead no GA4',leadEvt?num(leadEvt.v):'—',`<span>${leadEvt?esc(leadEvt.k)+(cad?' · '+pct(leadEvt.v/cad*100)+' dos cadastros reais':''):'nenhum evento de formulário encontrado'}</span>`)}
+    </div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card" style="grid-column:1/-1"><h3>Visitas e cadastros por ${GLABEL[g]}</h3><div class="sub">Sessões e page views (GA4) vs. cadastros reais (Lista VIP)</div><div class="chart-wrap short"><canvas id="c-ga1"></canvas></div></div>
+      <div class="card" style="grid-column:1/-1"><h3>Origem das sessões × cadastros</h3><div class="sub">Sessões pelo GA4; cadastros pela UTM gravada no cadastro. Se uma origem tem sessões mas nenhum cadastro, a UTM do link não está batendo — vale conferir.</div>
+        <table><thead><tr><th>Origem / mídia</th><th class="num">Sessões</th><th class="num">Usuários</th><th class="num">Cadastros</th><th class="num">Conversão</th></tr></thead><tbody>${srcRows.map(r=>`<tr><td>${esc(r.k)}</td><td class="num">${num(r.sessions)}</td><td class="num">${num(r.users)}</td><td class="num">${num(r.cad)}</td><td class="num">${r.sessions?pct(r.cad/r.sessions*100):'—'}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">Sem dados.</td></tr>'}</tbody></table></div>
+      <div class="card"><h3>Cidade</h3><div class="sub">Sessões</div><div class="bar-list" id="ga-city"></div></div>
+      <div class="card"><h3>Dispositivo</h3><div class="sub">Sessões</div><div class="chart-wrap short"><canvas id="c-ga-dev"></canvas></div></div>
+      <div class="card"><h3>Campanha (UTM)</h3><div class="sub">Sessões por utm_campaign</div><div class="bar-list" id="ga-camp"></div></div>
+      <div class="card"><h3>Eventos na página</h3><div class="sub">Cliques, scroll, formulário…</div><div class="bar-list" id="ga-ev"></div></div>
+    </div>${dropped}`;
+    lineBar('c-ga1',ag.labels,[{label:'Sessões',data:ag.series.sessions},{label:'Page views',data:ag.series.screenpageviews,color:C.sand},{label:'Cadastros',data:ag.series.cadastros,type:'line',color:C.gold}]);
+    barList($('#ga-city'),cities); donut('c-ga-dev',devs.map(d=>d.k),devs.map(d=>d.v)); barList($('#ga-camp'),camp); barList($('#ga-ev'),events);
+  } else {
+    const buys=T('ecommercepurchases')||T('transactions'), pbuys=PT('ecommercepurchases')||PT('transactions'); const rev=T('purchaserevenue')||T('totalrevenue'), prev=PT('purchaserevenue')||PT('totalrevenue');
+    const carts=T('addtocarts'), chk=T('checkouts'), iv=T('itemsviewed'); const abandon=Math.max(0,carts-buys); const convR=engS?buys/engS*100:0, pconvR=PT('sessions')?pbuys/PT('sessions')*100:0;
+    const ag=aggregate(D,p,g,['sessions','addtocarts','ecommercepurchases']);
+    const srcRows=Object.values(inP(ga.source).reduce((m,r)=>{const k=srcOf(r);const o=m[k]=m[k]||{k,sessions:0,carts:0,buys:0,rev:0};o.sessions+=+r.sessions||0;o.carts+=+r.addtocarts||0;o.buys+=+r.ecommercepurchases||0;o.rev+=+r.purchaserevenue||0;return m;},{})).sort((a,b)=>b.sessions-a.sessions).slice(0,12);
+    const pages=Object.values(inP(ga.pages).reduce((m,r)=>{const k=r.pagepath||'—';const o=m[k]=m[k]||{k,title:r.pagetitle,pv:0,users:0,eng:0};o.pv+=+r.screenpageviews||0;o.users+=+r.totalusers||0;o.eng+=+r.userengagementduration||0;return m;},{})).sort((a,b)=>b.pv-a.pv).slice(0,15);
+    const items=Object.values(inP(ga.items).reduce((m,r)=>{const k=r.itemname||'—';const o=m[k]=m[k]||{k,v:0,c:0,b:0,rev:0};o.v+=+r.itemsviewed||0;o.c+=+r.itemsaddedtocart||0;o.b+=+r.itemspurchased||0;o.rev+=+r.itemrevenue||0;return m;},{})).sort((a,b)=>b.v-a.v).slice(0,15);
+    el.innerHTML=head+`
+    <div class="grid kpis">
+      ${kpi('Sessões',num(engS),deltaHTML(engS,PT('sessions')))}
+      ${kpi('Usuários',num(T('totalusers')),deltaHTML(T('totalusers'),PT('totalusers')),`<span>· ${num(T('newusers'))} novos</span>`)}
+      ${kpi('Page views',num(T('screenpageviews')),deltaHTML(T('screenpageviews'),PT('screenpageviews')))}
+      ${kpi('Tempo de engajamento',fmtDur(avgEng),deltaHTML(avgEng,pAvgEng),`<span>por sessão</span>`)}
+      ${kpi('Produtos vistos',num(iv),deltaHTML(iv,PT('itemsviewed')))}
+      ${kpi('Adições ao carrinho',num(carts),deltaHTML(carts,PT('addtocarts')))}
+      ${kpi('Checkouts',num(chk),deltaHTML(chk,PT('checkouts')))}
+      ${kpi('Compras',num(buys),deltaHTML(buys,pbuys),`<span>· conv. ${pct(convR)}</span>`)}
+      ${kpi('Receita',brl(rev),deltaHTML(rev,prev),`<span>· ticket ${buys?brl(rev/buys):'—'}</span>`)}
+      ${kpi('Carrinhos abandonados',num(abandon),`<span>${carts?pct(abandon/carts*100)+' dos carrinhos':''}</span>`)}
+    </div>
+    <div class="grid cols-2" style="margin-top:14px">
+      <div class="card"><h3>Sessões, carrinhos e compras por ${GLABEL[g]}</h3><div class="sub">${S.cmp?'':''}</div><div class="chart-wrap short"><canvas id="c-ga1"></canvas></div></div>
+      <div class="card"><h3>Funil de compra</h3><div class="sub">Sessões → produto visto → carrinho → checkout → compra</div><div class="chart-wrap short"><canvas id="c-ga-funnel"></canvas></div></div>
+      <div class="card" style="grid-column:1/-1"><h3>Origem das sessões</h3><div class="sub">De onde vem quem compra</div>
+        <table><thead><tr><th>Origem / mídia</th><th class="num">Sessões</th><th class="num">Carrinhos</th><th class="num">Compras</th><th class="num">Conv.</th><th class="num">Receita</th></tr></thead><tbody>${srcRows.map(r=>`<tr><td>${esc(r.k)}</td><td class="num">${num(r.sessions)}</td><td class="num">${num(r.carts)}</td><td class="num">${num(r.buys)}</td><td class="num">${r.sessions?pct(r.buys/r.sessions*100):'—'}</td><td class="num">${brl(r.rev)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">Sem dados.</td></tr>'}</tbody></table></div>
+      <div class="card"><h3>Produtos</h3><div class="sub">Mais vistos no período</div><div class="table-wrap" style="max-height:360px"><table><thead><tr><th>Produto</th><th class="num">Vistos</th><th class="num">Carrinho</th><th class="num">Comprados</th><th class="num">Receita</th></tr></thead><tbody>${items.map(i=>`<tr><td>${esc(i.k)}</td><td class="num">${num(i.v)}</td><td class="num">${num(i.c)}</td><td class="num">${num(i.b)}</td><td class="num">${brl(i.rev)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">Sem dados de produto (a loja ainda não está no ar ou o e-commerce do GA4 não está enviando itens).</td></tr>'}</tbody></table></div></div>
+      <div class="card"><h3>Páginas mais vistas</h3><div class="sub">Com tempo médio de engajamento</div><div class="table-wrap" style="max-height:360px"><table><thead><tr><th>Página</th><th class="num">Views</th><th class="num">Usuários</th><th class="num">Tempo</th></tr></thead><tbody>${pages.map(r=>`<tr><td title="${esc(r.title||'')}">${esc(r.k)}</td><td class="num">${num(r.pv)}</td><td class="num">${num(r.users)}</td><td class="num">${fmtDur(r.users?r.eng/r.users:0)}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">Sem dados.</td></tr>'}</tbody></table></div></div>
+      <div class="card"><h3>Cidade</h3><div class="sub">Sessões</div><div class="bar-list" id="ga-city"></div></div>
+      <div class="card"><h3>Dispositivo</h3><div class="sub">Sessões</div><div class="chart-wrap short"><canvas id="c-ga-dev"></canvas></div></div>
+      <div class="card"><h3>Eventos</h3><div class="sub">Os mais frequentes</div><div class="bar-list" id="ga-ev"></div></div>
+    </div>${dropped}`;
+    lineBar('c-ga1',ag.labels,[{label:'Sessões',data:ag.series.sessions},{label:'Carrinhos',data:ag.series.addtocarts,color:C.gold},{label:'Compras',data:ag.series.ecommercepurchases,color:C.ok}]);
+    lineBar('c-ga-funnel',['Sessões','Produto visto','Carrinho','Checkout','Compra'],[{label:'Quantidade',data:[engS,iv,carts,chk,buys]}]);
+    barList($('#ga-city'),cities); donut('c-ga-dev',devs.map(d=>d.k),devs.map(d=>d.v)); barList($('#ga-ev'),events);
+  }
+  bindGAView(); }
+function bindGAView(){ $('#ga-view').onclick=e=>{const b=e.target.closest('button'); if(b&&b.dataset.v!==GAUI.view){GAUI.view=b.dataset.v;renderGA();}}; }
 
 /* =========================================================
    ABA 4 · Projeções
