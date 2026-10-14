@@ -1,49 +1,50 @@
 # CASU — Board de Operação
 
-Evolução do painel VIP (`painel.casubrasil.com.br`) para um board com 5 abas:
-Lista VIP · Meta Ads · Instagram · Projeções · Cronograma.
+Dashboard interno com 6 abas: Clube CASU · Meta Ads · Instagram · Analytics · Projeções · Cronograma.
+
+Em produção: **https://painel.casubrasil.com.br/**
 
 ## Estrutura
 
 ```
 .
 ├── index.html       ← o board inteiro (Chart.js e Supabase embutidos)
-├── api/windsor.js   ← proxy serverless: fala com o Windsor usando a chave guardada no Vercel
-├── vercel.json
+├── api/
+│   ├── windsor.js   ← proxy serverless Windsor (Meta Ads · GA4)
+│   ├── meta.js      ← proxy direto da Marketing API do Meta
+│   └── instagram.js ← proxy direto da Graph API do Instagram
+├── vercel.json      ← headers de segurança + noindex
 └── README.md
 ```
 
-## Deploy (substituindo o painel atual)
-
-1. No repositório do painel no GitHub, substitua o `index.html` e adicione a pasta `api/` e o `vercel.json`.
-2. No Vercel → projeto do painel → **Settings → Environment Variables**, crie:
+## Variáveis de ambiente (Vercel)
 
 | Variável | O que é |
 |---|---|
-| `WINDSOR_KEY` | chave da API do Windsor (mesma usada no BH Vida) |
-| `META_ACCOUNT` | ID da conta de anúncios Meta da CASU — o valor que aparece em `select_accounts` no Windsor |
-| `IG_ACCOUNT` | ID do Instagram Insights do @casubrasil no Windsor (quando conectar) |
-| `GADS_ACCOUNT` | ID da conta Google Ads (fase de lançamento, ex.: `123-456-7890`) |
-| `META_FOLLOW_FIELD` | opcional — nome do campo de seguidores no Windsor, se o padrão `actions_follow` não existir |
+| `WINDSOR_KEY` | Chave da API do Windsor (fallback para Meta/GA4) |
+| `META_ACCOUNT` | ID da conta Meta Ads — `1037134262258463` ("CA 01 - Vista Casu") |
+| `META_TOKEN` ou `IG_TOKEN` | Token do Meta com `ads_read` |
+| `IG_USER_ID` | ID da conta profissional do Instagram |
+| `GA4_ACCOUNT_LP_VIP` | GA4 da LP — `551732823` ("VIP Casu") |
+| `GA4_ACCOUNT_ECOMM` | GA4 do e-commerce — `548720875` ("Vista Casu") |
+| `GADS_ACCOUNT` | Conta Google Ads (quando houver) |
 
-3. Faça um novo deploy (Deployments → Redeploy) para as variáveis valerem.
-4. Login continua o mesmo: usuário admin do Supabase.
+## Convenção temporal
 
-## Supabase (já aplicado)
+- **Até 05/10/2026**: período de pré-lançamento — nomenclatura "Grupo VIP"
+- **A partir de 06/10/2026**: operação atual — nomenclatura "Clube CASU"
 
-- Tabela `cronograma` (peças de conteúdo, editável no board, tempo real)
-- Tabela `config` (verbas por fase, datas do lançamento, metas)
-- RLS: só usuário autenticado lê e escreve
+A constante `CUTOFF_DATE='2026-10-06'` no `index.html` define o corte. A aba
+Clube CASU tem toggle no topo entre "Clube CASU" (atual) e "Grupo VIP (pré-lançamento)"
+igual a aba Analytics tem entre "Landing page VIP" e "E-commerce".
 
-## Como as abas funcionam
+## Deploy
 
-- **Filtro global** (topo): presets, De/Até, granularidade automática (≤45 dias → dia, ≤140 → semana, acima → mês) com override manual, comparação com o período anterior de mesma duração em todo KPI.
-- **Lista VIP**: cadastros, grupo, conversão, média/dia com tendência, origem por UTM, cidade, tabela com busca/filtro/CSV.
-- **Meta Ads**: overview, insights automáticos, seguidores/dia com média móvel, campanhas (com R$/dia), público (idade/gênero, região, dispositivo, posicionamento), engajamento, retenção de vídeo, formatos. "Cadastros VIP (pago)" vêm dos leads reais com `utm_medium` = paid/cpc/ads.
-- **Instagram**: liga sozinha quando `IG_ACCOUNT` existir.
-- **Projeções**: entregue + verba restante × rendimento por real (base ajustável: 7/14/30 dias/tudo), três cenários, premissas salvas no Supabase.
-- **Cronograma**: próximas ações, atrasados, lista editável (status inline), calendário mensal, link do Drive por peça.
+Site estático + 3 serverless functions. O Vercel detecta e publica a cada
+`git push`. Após mudanças nas variáveis de ambiente, fazer **Redeploy** manual
+para valerem (Deployments → ... → Redeploy).
 
-## Campos do Windsor
+## Login
 
-Se o Windsor rejeitar algum campo, o proxy remove o campo e tenta de novo; o board mostra no rodapé da aba quais foram ignorados. Se aparecer "nenhum campo de seguidores encontrado", verifique no Windsor o nome do campo de follows da conta e configure `META_FOLLOW_FIELD`.
+Autenticação Supabase. Usuário admin criado em Authentication → Users do
+projeto Supabase.

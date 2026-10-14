@@ -203,7 +203,7 @@ td .icon-btn:hover{background:var(--wine-soft);color:var(--wine)}
     <div class="top-row">
       <div class="brand">CASU<small>Board de operação</small></div>
       <nav class="tabs" id="tabs">
-        <button class="tab active" data-tab="vip">Lista VIP</button>
+        <button class="tab active" data-tab="vip">Clube CASU</button>
         <button class="tab" data-tab="meta">Meta Ads</button>
         <button class="tab" data-tab="ig">Instagram</button>
         <button class="tab" data-tab="ga">Analytics</button>
@@ -243,6 +243,8 @@ const SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZ
 const sb=window.supabase.createClient(SB_URL,SB_KEY);
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const CAMPAIGN_START='2026-08-20';
+/* Data de virada: até 05/10 = pré-lançamento (Grupo VIP); a partir de 06/10 = Clube CASU */
+const CUTOFF_DATE='2026-10-06';
 
 const S={ tab:'vip', preset:'30', from:null, to:null, gran:'auto', cmp:true,
   leads:[], cron:[], config:{}, meta:{}, ig:{}, gads:{}, metaStatus:null, charts:{} };
@@ -339,32 +341,38 @@ function normLead(r){ const d=new Date(r.created_at); return {...r,date:iso(d)};
 sb.auth.getSession().then(({data:{session}})=>{ if(session) boot(); });
 
 /* =========================================================
-   ABA 1 · Lista VIP
+   ABA 1 · Clube CASU (Grupo VIP + Clube ativo)
    ========================================================= */
 const isPaid=l=>/meta|facebook|instagram|fb|ig/i.test(l.utm_source||'') && /paid|cpc|ads|trafego|tráfego|pago/i.test(l.utm_medium||'');
 const originOf=l=>{ if(!l.utm_source) return l.referrer?'Referência: '+(()=>{try{return new URL(l.referrer).hostname}catch{return l.referrer}})():'Direto'; if(l.utm_content) return `${l.utm_source} · ${l.utm_content}`; return `${l.utm_source}${l.utm_medium?' · '+l.utm_medium:''}`; };
-const VIPUI={q:'',filter:'all'};
+const VIPUI={q:'',filter:'all',view:'clube'}; /* 'grupo' = < CUTOFF · 'clube' = >= CUTOFF */
 function renderVIP(){
   const p=period(), pv=prevPeriod(), g=granularity();
-  const rows=S.leads.map(l=>({date:l.date,leads:1,grupo:l.clicked_whatsapp?1:0}));
+  /* Sub-página: 'grupo' = leads do pré-lançamento (até 05/10) · 'clube' = de 06/10 em diante */
+  const inView=l=>VIPUI.view==='grupo' ? l.date<CUTOFF_DATE : l.date>=CUTOFF_DATE;
+  const leadsScoped=S.leads.filter(inView);
+  const viewLabel=VIPUI.view==='grupo'?'Grupo VIP':'Clube CASU';
+  const viewSub=VIPUI.view==='grupo'?`pré-lançamento · até ${dmy(addDays(CUTOFF_DATE,-1))}`:`ativo · de ${dmy(CUTOFF_DATE)} em diante`;
+  const rows=leadsScoped.map(l=>({date:l.date,leads:1,grupo:l.clicked_whatsapp?1:0}));
   const cur=aggregate(rows,p,g,['leads','grupo']), tot=sumField(rows,p,'leads'), grp=sumField(rows,p,'grupo'), ptot=sumField(rows,pv,'leads'), pgrp=sumField(rows,pv,'grupo');
   const conv=tot?grp/tot*100:0, pconv=ptot?pgrp/ptot*100:0;
   const daily=aggregate(rows,p,'day',['leads']).series.leads, avg=dailyAvg(tot,p), pavg=dailyAvg(ptot,pv), tr=trend(daily);
-  const meta=(S.config.metas||{}).leads_vip||0, all=S.leads.length, allGrp=S.leads.filter(l=>l.clicked_whatsapp).length;
-  const byOrigin={}; S.leads.filter(l=>inRange(l.date,p)).forEach(l=>{const k=originOf(l);byOrigin[k]=(byOrigin[k]||0)+1;});
+  const meta=(S.config.metas||{}).leads_vip||0, all=leadsScoped.length, allGrp=leadsScoped.filter(l=>l.clicked_whatsapp).length;
+  const byOrigin={}; leadsScoped.filter(l=>inRange(l.date,p)).forEach(l=>{const k=originOf(l);byOrigin[k]=(byOrigin[k]||0)+1;});
   const origins=Object.entries(byOrigin).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,8);
-  const byCity={}; S.leads.filter(l=>inRange(l.date,p)&&l.city).forEach(l=>{const k=`${l.city}${l.region?'/'+l.region:''}`;byCity[k]=(byCity[k]||0)+1;});
+  const byCity={}; leadsScoped.filter(l=>inRange(l.date,p)&&l.city).forEach(l=>{const k=`${l.city}${l.region?'/'+l.region:''}`;byCity[k]=(byCity[k]||0)+1;});
   const cities=Object.entries(byCity).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,8);
-  const paidLeads=S.leads.filter(l=>inRange(l.date,p)&&isPaid(l)).length;
+  const paidLeads=leadsScoped.filter(l=>inRange(l.date,p)&&isPaid(l)).length;
   const el=$('#tab-vip');
   el.innerHTML=`
+  <div class="tools" style="margin-bottom:14px"><div class="seg" id="vip-view"><button data-v="clube" class="${VIPUI.view==='clube'?'on':''}">Clube CASU</button><button data-v="grupo" class="${VIPUI.view==='grupo'?'on':''}">Grupo VIP (pré-lançamento)</button></div><span class="note" style="margin:0">${viewSub}</span></div>
   <div class="grid kpis">
     ${kpi('Cadastros no período',num(tot),deltaHTML(tot,ptot))}
-    ${kpi('Entraram no grupo',num(grp),deltaHTML(grp,pgrp))}
-    ${kpi('Conversão p/ grupo',pct(conv),deltaHTML(conv,pconv))}
+    ${kpi(`Entraram no grupo ${viewLabel==='Clube CASU'?'(Clube)':'(VIP)'}`,num(grp),deltaHTML(grp,pgrp))}
+    ${kpi('Conversão p/ grupo WhatsApp',pct(conv),deltaHTML(conv,pconv))}
     ${kpi('Média por dia',nf1.format(avg),deltaHTML(avg,pavg),`<span class="trend ${tr.cls}">· ${tr.txt}</span>`)}
     ${kpi('Do tráfego pago',num(paidLeads),`<span>${tot?pct(paidLeads/tot*100):'—'} dos cadastros</span>`)}
-    ${kpi('Total acumulado',`${num(all)}${meta?`<small>/ ${num(meta)}</small>`:''}`,`<span>${num(allGrp)} no grupo · ${all?pct(allGrp/all*100):'—'}</span>`)}
+    ${kpi(`Total acumulado · ${viewLabel}`,`${num(all)}${meta?`<small>/ ${num(meta)}</small>`:''}`,`<span>${num(allGrp)} no grupo · ${all?pct(allGrp/all*100):'—'}</span>`)}
   </div>
   <div class="grid cols-2" style="margin-top:14px">
     <div class="card" style="grid-column:1/-1"><div class="card-head"><div><h3>Cadastros e entradas no grupo</h3><div class="sub">Por ${({day:'dia',week:'semana',month:'mês'})[g]} · ${S.cmp?'linha pontilhada = período anterior':''}</div></div></div><div class="chart-wrap" id="w-vip1"><canvas id="c-vip1"></canvas></div></div>
@@ -374,7 +382,7 @@ function renderVIP(){
   <div class="card" style="margin-top:14px">
     <div class="card-head"><div><h3>Leads</h3><div class="sub">Atualiza em tempo real</div></div>
       <div class="tools"><input id="vip-q" placeholder="Buscar nome, e-mail, cidade" value="${esc(VIPUI.q)}"><select id="vip-f"><option value="all">Todos do período</option><option value="in">Entraram no grupo</option><option value="out">Ainda não entraram</option><option value="paid">Tráfego pago</option><option value="marcela">Marcela</option><option value="everything">Todos (ignorar período)</option></select><button class="btn ghost sm" id="vip-csv">Exportar CSV</button></div></div>
-    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Grupo VIP</th><th>Local</th><th>Origem</th></tr></thead><tbody id="vip-tb"></tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Data</th><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Grupo</th><th>Local</th><th>Origem</th></tr></thead><tbody id="vip-tb"></tbody></table></div>
   </div>`;
   $('#vip-f').value=VIPUI.filter;
   const ds=[{label:'Cadastros',data:cur.series.leads},{label:'No grupo',data:cur.series.grupo,color:C.gold}];
@@ -387,15 +395,17 @@ function renderVIP(){
     $('#vip-tb').innerHTML=list.length?list.map(l=>`<tr><td>${dmyy(l.date)} ${new Date(l.created_at).toTimeString().slice(0,5)}</td><td>${esc(l.name)}</td><td>${esc(l.email)}</td><td>${esc(l.phone)}</td><td>${l.clicked_whatsapp?'<span class="chip ok">✓ entrou</span>':'<span class="chip no">não</span>'}</td><td>${esc([l.city,l.region].filter(Boolean).join('/'))}</td><td>${esc(originOf(l))}</td></tr>`).join(''):'<tr><td colspan="7" class="empty">Nenhum lead com esse filtro.</td></tr>'; VIPUI.list=list; };
   drawTable();
   $('#vip-q').oninput=e=>{VIPUI.q=e.target.value;drawTable();}; $('#vip-f').onchange=e=>{VIPUI.filter=e.target.value;drawTable();};
-  $('#vip-csv').onclick=()=>{ const h=['data','nome','email','telefone','grupo','cidade','estado','origem','utm_source','utm_medium','utm_campaign','utm_content']; const body=VIPUI.list.map(l=>[l.created_at,l.name,l.email,l.phone,l.clicked_whatsapp?'sim':'não',l.city,l.region,originOf(l),l.utm_source,l.utm_medium,l.utm_campaign,l.utm_content].map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')); const blob=new Blob(['\ufeff'+[h.join(';'),...body].join('\n')],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`casu-leads-${today()}.csv`; a.click(); };
+  $('#vip-csv').onclick=()=>{ const h=['data','nome','email','telefone','grupo','cidade','estado','origem','utm_source','utm_medium','utm_campaign','utm_content']; const body=VIPUI.list.map(l=>[l.created_at,l.name,l.email,l.phone,l.clicked_whatsapp?'sim':'não',l.city,l.region,originOf(l),l.utm_source,l.utm_medium,l.utm_campaign,l.utm_content].map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';')); const blob=new Blob(['\ufeff'+[h.join(';'),...body].join('\n')],{type:'text/csv;charset=utf-8'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`casu-${VIPUI.view}-${today()}.csv`; a.click(); };
+  bindVIPView();
 }
+function bindVIPView(){ const el=$('#vip-view'); if(el) el.onclick=e=>{const b=e.target.closest('button'); if(b&&b.dataset.v!==VIPUI.view){VIPUI.view=b.dataset.v;renderVIP();}}; }
 
 /* =========================================================
    ABA 2 · Meta Ads (Windsor)
    ========================================================= */
 const GLABEL={day:'dia',week:'semana',month:'mês'};
 const METAUI={metric:'spend'};
-const METRICS={spend:['Investimento',true],impressions:['Impressões'],reach:['Alcance'],link_clicks:['Cliques no link'],landing_page_views:['Page views da LP'],follows:['Seguidores'],cadastros:['Cadastros VIP (pago)'],post_engagement:['Engajamento']};
+const METRICS={spend:['Investimento',true],impressions:['Impressões'],reach:['Alcance'],link_clicks:['Cliques no link'],landing_page_views:['Page views da LP'],cadastros:['Cadastros Clube (pago)'],post_engagement:['Engajamento'],add_to_cart:['Add. carrinho'],purchases:['Compras']};
 function findFollowKey(fields){ return (fields||[]).find(f=>/follow/i.test(f)); }
 function normMeta(j){ const fk=(j.fields||[]).includes('follows')?'follows':findFollowKey(j.fields); return j.data.map(r=>({...r,date:normDate(r.date),follows:fk?(+r[fk]||0):0})); }
 
@@ -432,14 +442,13 @@ function metaInsights(t,pt,followsDaily,campaigns){ const out=[]; const add=(cls
     if(dCpm!==null&&dCpm>15&&dCtr!==null&&dCtr<-10) add('bad',`<b>Sinal de saturação de criativo:</b> CPM subiu ${nf1.format(dCpm)}% e CTR caiu ${nf1.format(-dCtr)}% vs período anterior. Vale rodar criativo novo ou ampliar público.`);
     else if(dCtr!==null&&dCtr>10) add('good',`<b>CTR melhorou ${nf1.format(dCtr)}%</b> em relação ao período anterior — os criativos atuais estão conversando melhor com o público.`);
     if(t.freq>3) add('warn',`<b>Frequência em ${nf1.format(t.freq)}.</b> Acima de 3 a mesma pessoa já viu o anúncio muitas vezes; o custo tende a subir daqui em diante.`);
-    if(dCpf!==null&&t.follows&&pt.follows){ if(dCpf<-10) add('good',`<b>Custo por seguidor caiu ${nf1.format(-dCpf)}%</b> (${brl(t.cpf)} agora vs ${brl(pt.cpf)}).`); else if(dCpf>15) add('warn',`<b>Custo por seguidor subiu ${nf1.format(dCpf)}%</b> (${brl(t.cpf)} vs ${brl(pt.cpf)}). Com ${dSpend>0?'mais':'menos'} verba, o retorno por real diminuiu.`); }
     if(dConv!==null&&dConv<-15&&t.landing_page_views>50) add('warn',`<b>Conversão da LP caiu ${nf1.format(-dConv)}%</b> (${pct(t.lpconv)}). O tráfego está chegando, mas cadastra menos — checar se o público mudou ou se a promessa do anúncio bate com a página.`);
     if(dConv!==null&&dConv>15&&t.cadastros>5) add('good',`<b>Conversão da LP subiu ${nf1.format(dConv)}%</b> — ${pct(t.lpconv)} de quem vê a página se cadastra.`);
   } else { if(t.freq>3) add('warn',`<b>Frequência em ${nf1.format(t.freq)}</b> — atenção à saturação.`); }
   if(t.link_clicks&&t.landing_page_views){ const drop=100-t.landing_page_views/t.link_clicks*100; if(drop>35) add('warn',`<b>O Meta registra ${nf1.format(drop)}% menos page views da LP do que cliques.</b> Quando a página é rápida, isso costuma ser o Pixel: o evento PageView não dispara em todas as visitas (bloqueadores, iOS, consentimento) — confira na aba Analytics se as sessões pagas no GA4 batem com os cliques. Se baterem, é medição, não perda.`); }
-  if(t.lpconv>0){ add(t.lpconv>=25?'good':t.lpconv>=12?'info':'warn',`<b>Conversão da LP: ${pct(t.lpconv)}</b> (${num(t.cadastros)} cadastros / ${num(t.landing_page_views)} page views). Referência para lista VIP de moda: 15–30%.`); }
-  if(t.cadastros) add('info',`<b>Custo por cadastro VIP: ${brl(t.cpl)}</b> · custo por seguidor: ${t.follows?brl(t.cpf):'—'} · investimento médio de ${brl(t.spendDay)}/dia.`);
-  const ft=trend(followsDaily); if(t.follows) add(ft.cls==='up'?'good':ft.cls==='down'?'warn':'info',`<b>Seguidores do pago: média de ${nf1.format(t.follows/Math.max(1,elapsedDays(period())))}/dia</b>, ritmo ${ft.txt}.`);
+  if(t.lpconv>0){ add(t.lpconv>=25?'good':t.lpconv>=12?'info':'warn',`<b>Conversão da LP: ${pct(t.lpconv)}</b> (${num(t.cadastros)} cadastros / ${num(t.landing_page_views)} page views). Referência para captura de clube de moda: 15–30%.`); }
+  if(t.cadastros) add('info',`<b>Custo por cadastro no Clube: ${brl(t.cpl)}</b> · investimento médio de ${brl(t.spendDay)}/dia.`);
+  /* Seguidores/visitas movidos para a aba Instagram */
   if(t.impressions&&t.video_views){ const p100=t.video_p100_watched_actions/t.video_views*100; add(p100>=15?'good':p100>=7?'info':'warn',`<b>${pct(p100)} de quem começa o vídeo assiste até o fim</b> (${pct(t.video_p25_watched_actions/t.video_views*100)} passam de 25%). ${p100<7?'Os primeiros 3 segundos seguram, mas o meio perde — testar vídeos mais curtos.':''}`); }
   if(campaigns.length>1){ const best=[...campaigns].filter(c=>c.link_clicks>30).sort((a,b)=>a.cpc-b.cpc)[0], worst=[...campaigns].filter(c=>c.link_clicks>30).sort((a,b)=>b.cpc-a.cpc)[0]; if(best&&worst&&best!==worst&&worst.cpc>best.cpc*1.6) add('info',`<b>${esc(best.campaign)}</b> entrega clique a ${brl(best.cpc)}; <b>${esc(worst.campaign)}</b> a ${brl(worst.cpc)}. Vale realocar parte da verba.`); }
   return out.join(''); }
@@ -456,7 +465,7 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   const fDaily=aggregate(rows,p,'day',['follows','spend']);
   const ftr=trend(fDaily.series.follows), favg=t.follows/Math.max(1,elapsedDays(p));
   // campanhas
-  const cmap={}; rows.filter(r=>inRange(r.date,p)).forEach(r=>{const k=r.campaign||'—'; const c=cmap[k]=cmap[k]||{campaign:k,spend:0,impressions:0,reach:0,link_clicks:0,landing_page_views:0,follows:0,post_engagement:0,days:new Set()}; ['spend','impressions','reach','link_clicks','landing_page_views','follows','post_engagement'].forEach(f=>c[f]+=+r[f]||0); if(+r.spend>0) c.days.add(r.date);});
+  const cmap={}; rows.filter(r=>inRange(r.date,p)).forEach(r=>{const k=r.campaign||'—'; const c=cmap[k]=cmap[k]||{campaign:k,spend:0,impressions:0,reach:0,link_clicks:0,landing_page_views:0,follows:0,post_engagement:0,add_to_cart:0,initiate_checkout:0,purchases:0,purchase_value:0,days:new Set()}; ['spend','impressions','reach','link_clicks','landing_page_views','follows','post_engagement','add_to_cart','initiate_checkout','purchases','purchase_value'].forEach(f=>c[f]+=+r[f]||0); if(+r.spend>0) c.days.add(r.date);});
   const campaigns=Object.values(cmap).map(c=>({...c,ctr:c.impressions?c.link_clicks/c.impressions*100:0,cpc:c.link_clicks?c.spend/c.link_clicks:0,cpf:c.follows?c.spend/c.follows:0,spendDay:c.spend/Math.max(1,c.days.size)})).sort((a,b)=>b.spend-a.spend);
   // público
   const grp=(arr,key,f='reach')=>{const m={};arr.forEach(r=>{const k=r[key]||'—';m[k]=(m[k]||0)+(+r[f]||0)});return Object.entries(m).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v);};
@@ -471,6 +480,8 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   const formats=Object.values(fmap);
   const vv=t.video_views||0; const funnel=[['Início (3s)',vv],['25%',t.video_p25_watched_actions],['50%',t.video_p50_watched_actions],['75%',t.video_p75_watched_actions],['100%',t.video_p100_watched_actions],['ThruPlay',t.video_thruplay_watched_actions]];
   const dropped=S.meta.dropped||[]; S.meta.matched=S.meta.matched||{};
+  /* Carrega GA4 e-commerce em paralelo (para o funil) — se falhar, o painel segue sem o bloco de comparação */
+  try{ await loadGA('ecomm'); }catch{}
   el.innerHTML=`
   <div class="grid kpis">
     ${kpi('Investimento',brl(t.spend),deltaHTML(t.spend,pt.spend),`<span>· ${brl(t.spendDay)}/dia</span>`)}
@@ -479,31 +490,22 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
     ${kpi('Cliques no link',num(t.link_clicks),deltaHTML(t.link_clicks,pt.link_clicks),`<span>· CTR ${pct(t.ctr)}</span>`)}
     ${kpi('CPC',brl(t.cpc),deltaHTML(t.cpc,pt.cpc,true),`<span>· CPM ${brl(t.cpm)}</span>`)}
     ${kpi('LP views (Meta)',num(t.landing_page_views),deltaHTML(t.landing_page_views,pt.landing_page_views))}
-    ${kpi('Cadastros VIP (pago)',num(t.cadastros),deltaHTML(t.cadastros,pt.cadastros),`<span>· conv. LP ${pct(t.lpconv)}</span>`)}
+    ${kpi('Cadastros Clube (pago)',num(t.cadastros),deltaHTML(t.cadastros,pt.cadastros),`<span>· conv. LP ${pct(t.lpconv)}</span>`)}
     ${kpi('Custo por cadastro',t.cadastros?brl(t.cpl):'—',deltaHTML(t.cpl,pt.cpl,true))}
-    ${kpi('Seguidores do pago',num(t.follows),deltaHTML(t.follows,pt.follows),`<span>· ${t.follows?brl(t.cpf):'—'}/seg.</span>`)}
-    ${kpi('Visitas ao perfil (pago)',num(t.profile_visits),deltaHTML(t.profile_visits,pt.profile_visits),`<span>· ${t.profile_visits?brl(t.spend/t.profile_visits):'—'}/visita</span>`)}
+    ${kpi('Add. carrinho',num(t.add_to_cart),deltaHTML(t.add_to_cart,pt.add_to_cart))}
+    ${kpi('Compras',num(t.purchases),deltaHTML(t.purchases,pt.purchases),`<span>· ${t.purchases?brl(t.spend/t.purchases):'—'}/compra</span>`)}
+    ${kpi('Receita atribuída',brl(t.purchase_value||0),deltaHTML(t.purchase_value||0,pt.purchase_value||0),`<span>· ROAS ${t.spend?nf2.format((t.purchase_value||0)/t.spend)+'x':'—'}</span>`)}
     ${kpi('Engajamento',num(t.post_engagement),deltaHTML(t.post_engagement,pt.post_engagement),`<span>· ${pct(t.engRate)} das impressões</span>`)}
   </div>
   <div class="grid cols-2" style="margin-top:14px;grid-template-columns:2fr 1fr">
     <div class="card"><div class="card-head"><div><h3>Evolução por ${GLABEL[g]}</h3><div class="sub">${S.cmp?'Linha pontilhada = período anterior':''}</div></div><div class="pill-row" id="meta-metric">${Object.entries(METRICS).map(([k,[l]])=>`<button class="pill ${k===METAUI.metric?'on':''}" data-m="${k}">${l}</button>`).join('')}</div></div><div class="chart-wrap"><canvas id="c-meta1"></canvas></div></div>
     <div class="card"><h3>Insights do período</h3><div class="sub">Lidos automaticamente dos números</div><div class="insights">${metaInsights(t,pt,fDaily.series.follows,campaigns)}</div></div>
   </div>
-  <div class="section-title">Seguidores e visitas ao perfil vindos do tráfego pago <span>${S.meta.source==='marketing_api'?(S.meta.matched.follows||[]).length?'seguidores = '+S.meta.matched.follows.join(', '):'<b style="color:var(--bad)">a API do Meta não reporta nenhum evento de "seguir" para esta conta</b>':'via Windsor'}${S.meta.source==='marketing_api'?' · visitas = '+((S.meta.matched.profile_visits||[]).join(', ')||'<b style="color:var(--bad)">nenhum evento de visita ao perfil</b>'):''}</span></div>
-  ${S.meta.source==='marketing_api'&&!(S.meta.matched.follows||[]).length?`<div class="ins warn" style="margin-bottom:12px"><i></i><div><b>Por que seguidores está zerado:</b> o Meta só devolve "seguidores" por anúncio quando a campanha tem objetivo de <b>Engajamento → Perfil do Instagram</b> (ou "Reconhecimento" com meta de seguidores). Campanhas de tráfego/conversão não reportam esse evento, mesmo que gerem seguidores. Os eventos que esta conta reporta hoje: ${(S.meta.actionTypes||[]).map(esc).join(', ')||'nenhum'}. Se um deles for o de seguir, defina <code>META_FOLLOW_TYPES</code> no Vercel com o nome.</div></div>`:''}
-  <div class="grid cols-2" style="grid-template-columns:2fr 1fr">
-    <div class="card"><h3>Seguidores por dia</h3><div class="sub">Barras = dia · linha = média móvel de 7 dias</div><div class="chart-wrap short"><canvas id="c-meta-f"></canvas></div></div>
-    <div class="grid kpis" style="grid-template-columns:1fr 1fr;align-content:start">
-      ${kpi('Média / dia',nf1.format(favg),`<span class="trend ${ftr.cls}">${ftr.txt}</span>`)}
-      ${kpi('Custo por seguidor',t.follows?brl(t.cpf):'—',deltaHTML(t.cpf,pt.cpf,true))}
-      ${kpi('Melhor dia',fDaily.series.follows.length?num(Math.max(...fDaily.series.follows)):'—',`<span>${fDaily.series.follows.length?dmy(fDaily.keys[fDaily.series.follows.indexOf(Math.max(...fDaily.series.follows))]):''}</span>`)}
-      ${kpi('Por gênero',followsByGender.length?followsByGender.map(x=>`${(gLabel[x.k]||x.k).slice(0,1)} ${num(x.v)}`).join(' · '):'—','')}
-    </div>
-  </div>
+  <div class="note" style="margin:10px 0"><b>Seguidores e visitas ao perfil</b> ficam na aba Instagram (Graph API — dado confiável). O Meta Ads só reporta esses eventos quando a campanha tem objetivo específico de seguidores/visitas; para campanhas de tráfego/conversão as contagens vêm zeradas.</div>
   <div class="section-title">Distribuição por campanha</div>
   <div class="grid cols-2" style="grid-template-columns:2fr 1fr">
-    <div class="card"><div class="table-wrap"><table><thead><tr><th>Campanha</th><th class="num">Invest.</th><th class="num">%</th><th class="num">R$/dia</th><th class="num">Impr.</th><th class="num">Alcance</th><th class="num">Cliques</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">LP views</th><th class="num">Seg.</th><th class="num">R$/seg.</th></tr></thead><tbody>
-      ${campaigns.map(c=>`<tr><td>${esc(c.campaign)}</td><td class="num">${brl(c.spend)}</td><td class="num">${pct(t.spend?c.spend/t.spend*100:0)}</td><td class="num">${brl(c.spendDay)}</td><td class="num">${num(c.impressions)}</td><td class="num">${num(c.reach)}</td><td class="num">${num(c.link_clicks)}</td><td class="num">${pct(c.ctr)}</td><td class="num">${brl(c.cpc)}</td><td class="num">${num(c.landing_page_views)}</td><td class="num">${num(c.follows)}</td><td class="num">${c.follows?brl(c.cpf):'—'}</td></tr>`).join('')||'<tr><td colspan="12" class="empty">Sem campanhas no período.</td></tr>'}
+    <div class="card"><div class="table-wrap"><table><thead><tr><th>Campanha</th><th class="num">Invest.</th><th class="num">%</th><th class="num">R$/dia</th><th class="num">Impr.</th><th class="num">Alcance</th><th class="num">Cliques</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">LP views</th><th class="num">Add Cart</th><th class="num">Compras</th><th class="num">ROAS</th></tr></thead><tbody>
+      ${campaigns.map(c=>`<tr><td>${esc(c.campaign)}</td><td class="num">${brl(c.spend)}</td><td class="num">${pct(t.spend?c.spend/t.spend*100:0)}</td><td class="num">${brl(c.spendDay)}</td><td class="num">${num(c.impressions)}</td><td class="num">${num(c.reach)}</td><td class="num">${num(c.link_clicks)}</td><td class="num">${pct(c.ctr)}</td><td class="num">${brl(c.cpc)}</td><td class="num">${num(c.landing_page_views)}</td><td class="num">${num(c.add_to_cart||0)}</td><td class="num">${num(c.purchases||0)}</td><td class="num">${(c.purchase_value||0)&&c.spend?nf2.format((c.purchase_value||0)/c.spend)+'x':'—'}</td></tr>`).join('')||'<tr><td colspan="13" class="empty">Sem campanhas no período.</td></tr>'}
     </tbody></table></div></div>
     <div class="card"><h3>Investimento por campanha</h3><div class="sub">Participação no período</div><div class="chart-wrap short"><canvas id="c-meta-camp"></canvas></div></div>
   </div>
@@ -517,24 +519,57 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
     <div class="card"><h3>Cliques por posicionamento</h3><div class="sub">Onde o clique acontece</div><div class="bar-list" id="meta-pos-clicks"></div></div>
     <div class="card"><h3>Engajamento</h3><div class="sub">Interações no período</div><div class="bar-list" id="meta-eng"></div></div>
   </div>
+
+  <div class="section-title">Funil do e-commerce <span>jornada registrada pelo Pixel: do clique no anúncio até a compra</span></div>
+  <div class="grid cols-2" style="grid-template-columns:3fr 2fr">
+    <div class="card">
+      <h3>Jornada pelo Pixel do Meta</h3>
+      <div class="sub">Cada passo mostra o volume e a conversão a partir do passo anterior</div>
+      ${(()=>{ const steps=[
+        {k:'Cliques no link',v:t.link_clicks,base:null},
+        {k:'LP views (Pixel)',v:t.landing_page_views,base:t.link_clicks},
+        {k:'Adicionar ao carrinho',v:t.add_to_cart,base:t.landing_page_views||t.link_clicks},
+        {k:'Iniciar pagamento',v:t.initiate_checkout,base:t.add_to_cart||t.landing_page_views},
+        {k:'Compras',v:t.purchases,base:t.initiate_checkout||t.add_to_cart||t.landing_page_views},
+      ]; const top=steps[0].v||1;
+      return `<div class="bar-list">${steps.map((s,i)=>{const w=(s.v||0)/top*100; const conv=s.base?(s.v||0)/s.base*100:null; return `<div class="row" style="grid-template-columns:1fr 2fr 110px"><span><b>${s.k}</b>${conv!==null?`<span class="note" style="margin:0;display:block">${pct(conv)} do passo anterior</span>`:''}</span><div class="bar"><i style="width:${Math.max(w,2)}%"></i></div><span class="num"><b>${num(s.v)}</b></span></div>`}).join('')}</div><div class="note">Receita atribuída: <b>${brl(t.purchase_value||0)}</b> · ROAS: <b>${t.spend?nf2.format((t.purchase_value||0)/t.spend)+'x':'—'}</b> · CAC: <b>${t.purchases?brl(t.spend/t.purchases):'—'}</b></div>`;})()}
+    </div>
+    <div class="card">
+      <h3>Comparação com o GA4</h3>
+      <div class="sub">O GA4 "Jornada de compra" conta usuários únicos; o Pixel conta eventos. Diferenças pequenas são esperadas.</div>
+      ${S.ga && S.ga[Object.keys(S.ga).find(k=>k.startsWith('ecomm|'))||'_']?(()=>{
+        const ec=S.ga[Object.keys(S.ga).find(k=>k.startsWith('ecomm|'))].daily||[];
+        const ecT=k=>sumField(ec,p,k);
+        const sess=ecT('sessions'), carts=ecT('addtocarts'), buys=ecT('ecommercepurchases')||ecT('transactions'), rev=ecT('purchaserevenue')||ecT('totalrevenue');
+        return `<div class="bar-list"><div class="row" style="grid-template-columns:1fr 90px"><span><b>Sessões (todas)</b></span><span class="num">${num(sess)}</span></div><div class="row" style="grid-template-columns:1fr 90px"><span><b>Add. carrinho</b></span><span class="num">${num(carts)}</span></div><div class="row" style="grid-template-columns:1fr 90px"><span><b>Compras</b></span><span class="num">${num(buys)}</span></div><div class="row" style="grid-template-columns:1fr 90px"><span><b>Receita</b></span><span class="num">${brl(rev)}</span></div></div><div class="note">Fonte: GA4 "Vista Casu" (todas as origens, não só pago). Para comparar só paga, abra a aba <b>Analytics</b> → <b>E-commerce</b>.</div>`;
+      })():`<div class="note">Abra a aba <b>Analytics → E-commerce</b> para carregar os dados do GA4. Depois volte aqui e os números aparecerão nesta seção.</div>`}
+    </div>
+  </div>
+
+  <div class="section-title">Campanhas focadas em e-commerce <span>campanhas com compras registradas pelo Pixel no período</span></div>
+  <div class="card">
+    <div class="table-wrap"><table><thead><tr><th>Campanha</th><th class="num">Verba</th><th class="num">Cliques</th><th class="num">CPC</th><th class="num">Add Cart</th><th class="num">Checkout</th><th class="num">Compras</th><th class="num">Receita</th><th class="num">ROAS</th><th class="num">CAC</th></tr></thead><tbody>
+      ${(()=>{const ecc=campaigns.filter(c=>(c.purchases||0)>0||(c.add_to_cart||0)>0).sort((a,b)=>(b.purchases||0)-(a.purchases||0)); return ecc.length?ecc.map(c=>`<tr><td>${esc(c.campaign)}</td><td class="num">${brl(c.spend)}</td><td class="num">${num(c.link_clicks)}</td><td class="num">${brl(c.cpc)}</td><td class="num">${num(c.add_to_cart||0)}</td><td class="num">${num(c.initiate_checkout||0)}</td><td class="num"><b>${num(c.purchases||0)}</b></td><td class="num">${brl(c.purchase_value||0)}</td><td class="num">${c.spend&&(c.purchase_value||0)?nf2.format((c.purchase_value||0)/c.spend)+'x':'—'}</td><td class="num">${c.purchases?brl(c.spend/c.purchases):'—'}</td></tr>`).join(''):'<tr><td colspan="10" class="empty">Nenhuma campanha gerou add. ao carrinho ou compra no período. O Pixel precisa estar instalado no e-commerce e o evento de compra configurado.</td></tr>';})()}
+    </tbody></table></div>
+  </div>
+
   ${S.meta.source==='marketing_api'?`<div class="section-title">Eventos reportados pelo Meta <span>todos os action types da conta no período — inclui os eventos do Pixel</span></div>
   <div class="grid cols-2"><div class="card"><div class="bar-list" id="meta-actions"></div></div>
   <div class="card"><h3>Pixel · funil de compra</h3><div class="sub">Eventos do Pixel atribuídos aos anúncios</div><div class="bar-list" id="meta-pixel"></div></div></div>`:''}
   <div class="section-title">Vídeo e formatos</div>
   <div class="grid cols-2">
     <div class="card"><h3>Retenção dos vídeos</h3><div class="sub">% de quem iniciou (3s) que chegou a cada marca</div><div class="chart-wrap short"><canvas id="c-meta-video"></canvas></div></div>
-    <div class="card"><h3>Formatos</h3><div class="sub">Vídeo vs. imagem, agregando os anúncios</div><table><thead><tr><th>Formato</th><th class="num">Anúncios</th><th class="num">Invest.</th><th class="num">Impr.</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">Seg.</th><th class="num">Eng./impr.</th></tr></thead><tbody>
-      ${formats.map(f=>`<tr><td>${f.formato}</td><td class="num">${f.n}</td><td class="num">${brl(f.spend)}</td><td class="num">${num(f.impressions)}</td><td class="num">${pct(f.impressions?f.link_clicks/f.impressions*100:0)}</td><td class="num">${brl(f.link_clicks?f.spend/f.link_clicks:0)}</td><td class="num">${num(f.follows)}</td><td class="num">${pct(f.impressions?f.eng/f.impressions*100:0)}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">Sem anúncios no período.</td></tr>'}
+    <div class="card"><h3>Formatos</h3><div class="sub">Vídeo vs. imagem, agregando os anúncios</div><table><thead><tr><th>Formato</th><th class="num">Anúncios</th><th class="num">Invest.</th><th class="num">Impr.</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">Eng./impr.</th></tr></thead><tbody>
+      ${formats.map(f=>`<tr><td>${f.formato}</td><td class="num">${f.n}</td><td class="num">${brl(f.spend)}</td><td class="num">${num(f.impressions)}</td><td class="num">${pct(f.impressions?f.link_clicks/f.impressions*100:0)}</td><td class="num">${brl(f.link_clicks?f.spend/f.link_clicks:0)}</td><td class="num">${pct(f.impressions?f.eng/f.impressions*100:0)}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">Sem anúncios no período.</td></tr>'}
     </tbody></table>
-    <h3 style="margin-top:18px">Anúncios</h3><div class="table-wrap" style="max-height:300px"><table><thead><tr><th>Anúncio</th><th>Formato</th><th class="num">Invest.</th><th class="num">CTR</th><th class="num">CPC</th><th class="num">Seg.</th></tr></thead><tbody>
-      ${adsArr.slice(0,25).map(a=>`<tr><td title="${esc(a.campaign)}" style="display:flex;gap:8px;align-items:center">${a.thumb?`<a href="${esc(a.link||a.thumb)}" target="_blank"><img src="${esc(a.thumb)}" style="width:36px;height:36px;object-fit:cover;border-radius:6px"></a>`:''}<span>${esc(a.ad)}</span></td><td><span class="chip ${a.formato[0]==='V'?'wine':'no'}">${a.formato}</span></td><td class="num">${brl(a.spend)}</td><td class="num">${pct(a.ctr)}</td><td class="num">${brl(a.cpc)}</td><td class="num">${num(a.follows)}</td></tr>`).join('')}
+    <h3 style="margin-top:18px">Anúncios</h3><div class="table-wrap" style="max-height:300px"><table><thead><tr><th>Anúncio</th><th>Formato</th><th class="num">Invest.</th><th class="num">CTR</th><th class="num">CPC</th></tr></thead><tbody>
+      ${adsArr.slice(0,25).map(a=>`<tr><td title="${esc(a.campaign)}" style="display:flex;gap:8px;align-items:center">${a.thumb?`<a href="${esc(a.link||a.thumb)}" target="_blank"><img src="${esc(a.thumb)}" style="width:36px;height:36px;object-fit:cover;border-radius:6px"></a>`:''}<span>${esc(a.ad)}</span></td><td><span class="chip ${a.formato[0]==='V'?'wine':'no'}">${a.formato}</span></td><td class="num">${brl(a.spend)}</td><td class="num">${pct(a.ctr)}</td><td class="num">${brl(a.cpc)}</td></tr>`).join('')}
     </tbody></table></div></div>
   </div>
   <div class="note">Fonte: ${S.meta.source==='marketing_api'?'Marketing API (Meta for Developers)':'Windsor'+(S.metaWhy?' — Marketing API falhou: '+esc(S.metaWhy):'')}. Campos Meta: ${Object.keys(S.meta.mapping||{}).length?'usando '+Object.entries(S.meta.mapping).map(([k,v])=>`${v} → ${k}`).join(', ')+'. ':''}${dropped.length?`Não encontrados nesta conta (zerados): <b>${dropped.join(', ')}</b>. `:''}${!S.meta.followKey?'<b>Nenhum campo de seguidores aceito</b> — descubra o nome no Windsor e defina META_FOLLOW_FIELD no Vercel.':''}</div>`;
   // gráficos
   const drawMain=()=>{ const m=METAUI.metric, [label,money]=METRICS[m]; const ds=[{label,data:cur.series[m]}]; if(S.cmp) ds.push({label:'Período anterior',data:prev.series[m],type:'line',borderDash:[4,4],color:C.muted,pointRadius:0}); lineBar('c-meta1',cur.labels,ds,{money:!!money}); };
   drawMain(); $('#meta-metric').onclick=e=>{const b=e.target.closest('.pill'); if(!b) return; METAUI.metric=b.dataset.m; $$('#meta-metric .pill').forEach(x=>x.classList.toggle('on',x===b)); drawMain();};
-  lineBar('c-meta-f',fDaily.keys.map(dmy),[{label:'Seguidores',data:fDaily.series.follows},{label:'Média 7d',data:movAvg(fDaily.series.follows),type:'line',color:C.gold,pointRadius:0}]);
   donut('c-meta-camp',campaigns.map(c=>c.campaign),campaigns.map(c=>c.spend));
   lineBar('c-meta-age',ages,genders.map((gv,i)=>({label:gLabel[gv]||gv,data:ages.map(a=>gender(gv).filter(r=>r.age===a).reduce((s,r)=>s+(+r.reach||0),0)),color:PALETTE[i]})),{stacked:true});
   barList($('#meta-region'),grp(S.meta.region,'region').slice(0,10));
@@ -546,7 +581,7 @@ async function renderMeta(){ const el=$('#tab-meta'); el.classList.add('loading'
   barList($('#meta-eng'),[{k:'Engajamento total',v:t.post_engagement},{k:'Reações',v:t.post_reactions},{k:'Comentários',v:t.comment},{k:'Compartilhamentos',v:t.post_shares},{k:'Salvamentos',v:t.post_saves},{k:'Cliques no link',v:t.link_clicks}].filter(x=>x.v>0));
   lineBar('c-meta-video',funnel.map(f=>f[0]),[{label:'% de quem iniciou',data:funnel.map(f=>vv?f[1]/vv*100:0)}]);
   if(S.meta.source==='marketing_api'){ const tot={}; rows.filter(r=>inRange(r.date,p)).forEach(r=>Object.entries(r.actions_raw||{}).forEach(([k,v])=>tot[k]=(tot[k]||0)+v)); barList($('#meta-actions'),Object.entries(tot).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,20));
-    barList($('#meta-pixel'),[{k:'Cliques no link',v:t.link_clicks},{k:'PageView (LP)',v:t.landing_page_views},{k:'Cadastros VIP (real)',v:t.cadastros},{k:'Lead (Pixel)',v:t.leads},{k:'Adicionar ao carrinho',v:t.add_to_cart},{k:'Iniciar checkout',v:t.initiate_checkout},{k:'Compra',v:t.purchases}]); }
+    barList($('#meta-pixel'),[{k:'Cliques no link',v:t.link_clicks},{k:'PageView (LP)',v:t.landing_page_views},{k:'Cadastros Clube (real)',v:t.cadastros},{k:'Lead (Pixel)',v:t.leads},{k:'Adicionar ao carrinho',v:t.add_to_cart},{k:'Iniciar checkout',v:t.initiate_checkout},{k:'Compra',v:t.purchases}]); }
 }
 
 /* =========================================================
@@ -675,7 +710,7 @@ function renderIGManual(el){ const p=period(), pv=prevPeriod(), g=granularity();
 
 
 /* =========================================================
-   ABA · Analytics (GA4) — LP VIP e E-commerce
+   ABA · Analytics (GA4) — Landing page e E-commerce
    ========================================================= */
 const GAUI={view:'lp'};
 const fmtDur=sec=>{ sec=Math.round(sec||0); return sec>=60?`${Math.floor(sec/60)}m ${pad(sec%60)}s`:`${sec}s`; };
@@ -722,12 +757,12 @@ async function renderGA(){ const el=$('#tab-ga'); el.classList.add('loading'); i
       ${kpi('Usuários',num(T('totalusers')),deltaHTML(T('totalusers'),PT('totalusers')),`<span>· ${num(T('newusers'))} novos</span>`)}
       ${kpi('Tempo de engajamento',fmtDur(avgEng),deltaHTML(avgEng,pAvgEng),`<span>por sessão</span>`)}
       ${kpi('Sessões engajadas',pct(engS?T('engagedsessions')/engS*100:0),deltaHTML(engS?T('engagedsessions')/engS*100:0,PT('sessions')?PT('engagedsessions')/PT('sessions')*100:0))}
-      ${kpi('Cadastros (Lista VIP)',num(cad),deltaHTML(cad,pcad),`<span>fonte: Supabase</span>`)}
+      ${kpi('Cadastros (Clube CASU)',num(cad),deltaHTML(cad,pcad),`<span>fonte: Supabase · Grupo VIP + Clube ativo</span>`)}
       ${kpi('Conversão da LP',pct(conv),deltaHTML(conv,pconv),`<span>cadastros / sessões</span>`)}
       ${kpi('Evento de lead no GA4',leadEvt?num(leadEvt.v):'—',`<span>${leadEvt?esc(leadEvt.k)+(cad?' · '+pct(leadEvt.v/cad*100)+' dos cadastros reais':''):'nenhum evento de formulário encontrado'}</span>`)}
     </div>
     <div class="grid cols-2" style="margin-top:14px">
-      <div class="card" style="grid-column:1/-1"><h3>Visitas e cadastros por ${GLABEL[g]}</h3><div class="sub">Sessões e page views (GA4) vs. cadastros reais (Lista VIP)</div><div class="chart-wrap short"><canvas id="c-ga1"></canvas></div></div>
+      <div class="card" style="grid-column:1/-1"><h3>Visitas e cadastros por ${GLABEL[g]}</h3><div class="sub">Sessões e page views (GA4) vs. cadastros reais (Clube CASU)</div><div class="chart-wrap short"><canvas id="c-ga1"></canvas></div></div>
       <div class="card" style="grid-column:1/-1"><h3>Origem das sessões × cadastros</h3><div class="sub">Sessões pelo GA4; cadastros pela UTM gravada no cadastro. Se uma origem tem sessões mas nenhum cadastro, a UTM do link não está batendo — vale conferir.</div>
         <table><thead><tr><th>Origem / mídia</th><th class="num">Sessões</th><th class="num">Usuários</th><th class="num">Cadastros</th><th class="num">Conversão</th></tr></thead><tbody>${srcRows.map(r=>`<tr><td>${esc(r.k)}</td><td class="num">${num(r.sessions)}</td><td class="num">${num(r.users)}</td><td class="num">${num(r.cad)}</td><td class="num">${r.sessions?pct(r.cad/r.sessions*100):'—'}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">Sem dados.</td></tr>'}</tbody></table></div>
       <div class="card"><h3>Cidade</h3><div class="sub">Sessões</div><div class="bar-list" id="ga-city"></div></div>
@@ -781,7 +816,7 @@ function bindGAView(){ $('#ga-view').onclick=e=>{const b=e.target.closest('butto
    ABA 4 · Projeções
    ========================================================= */
 const PROJ={base:'14',scen:1};
-const VEND_DEFAULT={ticket:249,vip_conv:8,site_conv_paid:1.5,site_conv_org:2.5,gads_cpc:1.2,click_to_session:85,org_sessions_day:40,meta_fat:15000};
+const VEND_DEFAULT={click_to_session:85,s2cart:1.5,cart2checkout:40,checkout2buy:50,gads_cpc:1.2,org_sessions_day:40};
 async function renderProj(){ const el=$('#tab-proj'); if(!el.innerHTML) el.innerHTML='<div class="empty">Calculando…</div>';
   const fases=S.config.fases||[]; const datas=S.config.datas||{}; const V={...VEND_DEFAULT,...(S.config.vendas||{})}; const m=PROJ.scen;
   // histórico Meta
@@ -790,86 +825,132 @@ async function renderProj(){ const el=$('#tab-proj'); if(!el.innerHTML) el.inner
   const t=today(); const baseP=PROJ.base==='all'?{from:CAMPAIGN_START,to:t}:{from:addDays(t,-(+PROJ.base-1)),to:t};
   const paid=S.leads.filter(isPaid), org=S.leads.filter(l=>!isPaid(l));
   const B=metaTotals(metaAll,baseP,paid); const rate=k=>B.spend?B[k]/B.spend:0;
-  const R={follows:rate('follows'),reach:rate('reach'),impressions:rate('impressions'),link_clicks:rate('link_clicks'),landing_page_views:rate('landing_page_views'),cadastros:rate('cadastros')};
+  const R={follows:rate('follows'),reach:rate('reach'),impressions:rate('impressions'),link_clicks:rate('link_clicks'),landing_page_views:rate('landing_page_views'),cadastros:rate('cadastros'),add_to_cart:rate('add_to_cart'),purchases:rate('purchases')};
   const cpc=B.cpc||1.0; const orgLeadsDay=org.filter(l=>inRange(l.date,baseP)).length/Math.max(1,elapsedDays(baseP));
+  // Instagram (seguidores + visitas ao perfil)
   if(!S.ig.daily&&S.igGraph!==false){ try{ if(S.igGraph===undefined){ S.igGraph=(await apiIG('status')).configured; } if(S.igGraph){ const j=await apiIG('daily',{from:addDays(t,-29),to:t}); S.igProj=j.data; } }catch{} }
-  let igDay=null; if(S.ig.daily||S.igProj){ const src=S.ig.daily||S.igProj; const ok=src.filter(r=>inRange(r.date,baseP)); igDay=ok.reduce((s,r)=>s+(+r.follower_count||0),0)/Math.max(1,Math.min(elapsedDays(baseP),ok.length||1)); if(!igDay&&(S.igLog||[]).length>=2) igDay=igOrganicPerDay(baseP).perDay; } else if((S.igLog||[]).length>=2){ igDay=igOrganicPerDay(baseP).perDay; }
+  let igDay=null, pvDay=null; if(S.ig.daily||S.igProj){ const src=S.ig.daily||S.igProj; const ok=src.filter(r=>inRange(r.date,baseP)); const days=Math.max(1,Math.min(elapsedDays(baseP),ok.length||1));
+    igDay=ok.reduce((s,r)=>s+(+r.follower_count||0),0)/days;
+    pvDay=ok.reduce((s,r)=>s+(+r.profile_views||0),0)/days;
+    if(!igDay&&(S.igLog||[]).length>=2) igDay=igOrganicPerDay(baseP).perDay;
+  } else if((S.igLog||[]).length>=2){ igDay=igOrganicPerDay(baseP).perDay; }
   const followersNow=S.ig.followersTotal||(()=>{const l=[...(S.igLog||[])].sort((a,b)=>b.data.localeCompare(a.data))[0]; return l?l.seguidores:0})();
-  // ---- fase pré: lista VIP e seguidores até o VIP day ----
-  const pre=fases.find(f=>f.id==='pre')||fases[0]||{inicio:CAMPAIGN_START,fim:'2026-10-05',meta_ads:0}; const lan=fases.find(f=>f.id==='lancamento')||fases[1]||{inicio:'2026-10-06',fim:'2026-10-22',meta_ads:0,google_ads:0};
-  const vipDate=datas.vip||'2026-10-05', openDate=datas.publico||'2026-10-06';
+
+  // Fases
+  const pre=fases.find(f=>f.id==='pre')||fases[0]||{nome:'Pré-lançamento',inicio:CAMPAIGN_START,fim:'2026-10-05',meta_ads:0}; 
+  const lan=fases.find(f=>f.id==='lancamento')||fases[1]||{nome:'Lançamento',inicio:'2026-10-06',fim:'2026-10-22',meta_ads:0,google_ads:0};
   const preSpent=sumField(metaAll,{from:pre.inicio,to:pre.fim},'spend'); const preRemain=Math.max(0,pre.meta_ads-preSpent); const preDaysLeft=pre.fim>=t?daysBetween(t,pre.fim):0;
-  const listNow=S.leads.length; const listProj=listNow+preRemain*R.cadastros*m+orgLeadsDay*preDaysLeft*m;
-  const daysToOpen=Math.max(0,daysBetween(t,openDate)-1); const followersProj=followersNow+(preRemain*R.follows+(igDay||0)*daysToOpen)*m;
-  // ---- VIP day ----
-  const vipOrders=listProj*(V.vip_conv/100)*m, vipRev=vipOrders*V.ticket;
-  // ---- lançamento ----
-  const lanDays=daysBetween(lan.inicio,lan.fim); const lanSpent=sumField(metaAll,{from:lan.inicio,to:lan.fim},'spend');
-  const metaClicks=lan.meta_ads/cpc, metaSess=metaClicks*(V.click_to_session/100), metaOrders=metaSess*(V.site_conv_paid/100)*m, metaRev=metaOrders*V.ticket;
-  const gSess=(lan.google_ads||0)/V.gads_cpc*(V.click_to_session/100), gOrders=gSess*(V.site_conv_paid/100)*m, gRev=gOrders*V.ticket;
-  const orgSess=V.org_sessions_day*lanDays, orgOrders=orgSess*(V.site_conv_org/100)*m, orgRev=orgOrders*V.ticket;
-  const lanOrders=metaOrders+gOrders+orgOrders, lanRev=metaRev+gRev+orgRev, lanSpend=lan.meta_ads+(lan.google_ads||0);
-  const totalRev=vipRev+lanRev, totalOrders=vipOrders+lanOrders; const roas=lanSpend?(metaRev+gRev)/lanSpend:0; const cpa=(metaOrders+gOrders)?lanSpend/(metaOrders+gOrders):0;
-  const breakEvenConv=metaSess+gSess?lanSpend/(V.ticket*(metaSess+gSess))*100:0; const gap=V.meta_fat-totalRev;
-  // dados reais do e-commerce, se já existirem
-  const ecKey=Object.keys(S.ga||{}).find(k=>k.startsWith('ecomm|')); const ec=ecKey&&S.ga[ecKey]&&S.ga[ecKey].daily?S.ga[ecKey].daily:null; const ecT=k=>ec?sumField(ec,baseP,k):0;
-  const realConv=ec&&ecT('sessions')?ecT('ecommercepurchases')/ecT('sessions')*100:null; const realTicket=ec&&ecT('ecommercepurchases')?ecT('purchaserevenue')/ecT('ecommercepurchases'):null; const realSessDay=ec?ecT('sessions')/Math.max(1,elapsedDays(baseP)):null;
+  const lanSpent=sumField(metaAll,{from:lan.inicio,to:lan.fim},'spend'); const lanRemain=Math.max(0,lan.meta_ads-lanSpent); const lanDaysLeft=lan.fim>=t?daysBetween(t<lan.inicio?lan.inicio:t,lan.fim):0; const lanDaysTotal=daysBetween(lan.inicio,lan.fim);
+
+  // Clube CASU (de 06/10 em diante) e Grupo VIP (até 05/10)
+  const clubeLeads=S.leads.filter(l=>l.date>=CUTOFF_DATE); const vipLeads=S.leads.filter(l=>l.date<CUTOFF_DATE);
+  const clubeInGroup=clubeLeads.filter(l=>l.clicked_whatsapp).length;
+  const vipInGroup=vipLeads.filter(l=>l.clicked_whatsapp).length;
+  const groupConv=clubeLeads.length?clubeInGroup/clubeLeads.length*100:(S.leads.length?S.leads.filter(l=>l.clicked_whatsapp).length/S.leads.length*100:0);
+
+  // Projeção de métricas usando a verba restante do lançamento (preRemain + lanRemain)
+  const totalRemain=preRemain+lanRemain;
+  const projCadastros=totalRemain*R.cadastros*m;
+  const projFollows=totalRemain*R.follows*m + (igDay||0)*lanDaysLeft*m;
+  const projLinkClicks=totalRemain*R.link_clicks*m;
+  const projLPViews=totalRemain*R.landing_page_views*m;
+
+  // Projeção funil e-commerce (dados reais do GA4 se existir, senão premissa)
+  const ecKey=Object.keys(S.ga||{}).find(k=>k.startsWith('ecomm|'));
+  const ec=ecKey&&S.ga[ecKey]&&S.ga[ecKey].daily?S.ga[ecKey].daily:null; const ecT=k=>ec?sumField(ec,baseP,k):0;
+  const realSessDay=ec?ecT('sessions')/Math.max(1,elapsedDays(baseP)):null;
+  const realCartRate=ec&&ecT('sessions')?ecT('addtocarts')/ecT('sessions')*100:null;
+  const realBuyRate=ec&&ecT('sessions')?(ecT('ecommercepurchases')||ecT('transactions'))/ecT('sessions')*100:null;
+  const realTicket=ec&&(ecT('ecommercepurchases')||ecT('transactions'))?(ecT('purchaserevenue')||ecT('totalrevenue'))/(ecT('ecommercepurchases')||ecT('transactions')):null;
+
+  // Taxas do funil (reais quando disponível, senão da premissa)
+  const sess2cart = realCartRate!==null?realCartRate:V.s2cart;      // % de sessões que adicionam ao carrinho
+  const cart2chk  = V.cart2checkout;                                 // % add→checkout (premissa — GA4 não separa fácil)
+  const chk2buy   = V.checkout2buy;                                  // % checkout→compra (premissa)
+  const sess2buy  = realBuyRate!==null?realBuyRate:(sess2cart*cart2chk*chk2buy/10000);
+
+  // Sessões projetadas no lançamento (pago + orgânico)
+  const projSessPaid = projLinkClicks*(V.click_to_session/100);
+  const projSessOrg  = (V.org_sessions_day||realSessDay||0)*lanDaysLeft;
+  const projSessTot  = projSessPaid+projSessOrg;
+  const projUsers    = Math.round(projSessTot*0.85); // usuários ≈ sessões × ~0.85 (um usuário gera +de uma sessão)
+  const projCarts    = projSessTot*(sess2cart/100)*m;
+  const projCheckout = projCarts*(cart2chk/100)*m;
+  const projBuys     = projCheckout*(chk2buy/100)*m;
+
   el.innerHTML=`
-  <div class="card"><div class="card-head"><div><h3>Projeção de vendas do lançamento</h3><div class="sub">Pré-lançamento constrói lista e seguidores; ${dmy(vipDate)} vende para a lista VIP; de ${dmy(lan.inicio)} a ${dmy(lan.fim)} a verba de lançamento leva tráfego para a loja. Taxas do Meta vêm dos dados reais; conversão do site e ticket são premissas até a loja gerar histórico.</div></div>
+  <div class="card"><div class="card-head"><div><h3>Projeção de métricas do lançamento</h3><div class="sub">Com base no rendimento por real investido no período-base e nas taxas atuais do GA4 (quando disponíveis). Sem projeção de faturamento — foco em custos e métricas de operação.</div></div>
     <div class="tools"><span class="lbl">Base</span><div class="seg" id="proj-base">${[['7','7 dias'],['14','14 dias'],['30','30 dias'],['all','tudo']].map(([k,l])=>`<button data-b="${k}" class="${PROJ.base===k?'on':''}">${l}</button>`).join('')}</div>
       <span class="lbl">Cenário</span><div class="seg" id="proj-scen">${[[0.7,'Conservador −30%'],[1,'Base'],[1.3,'Otimista +30%']].map(([k,l])=>`<button data-s="${k}" class="${PROJ.scen===k?'on':''}">${l}</button>`).join('')}</div></div></div>
     ${metaOK?'':'<div class="ins warn" style="margin-top:8px"><i></i><div><b>Sem histórico do Meta Ads.</b> CPC e taxas por real estão em valores padrão até os dados chegarem.</div></div>'}
-    <div class="grid kpis" style="margin-top:14px">
-      ${kpi('Faturamento projetado',brl(totalRev),`<span>${num(totalOrders)} pedidos · ticket ${brl(V.ticket)}</span>`)}
-      ${kpi('Meta de faturamento',brl(V.meta_fat),`<span class="trend ${gap<=0?'up':'down'}">${gap<=0?'projeção acima da meta em '+brl(-gap):'faltam '+brl(gap)}</span>`)}
-      ${kpi('ROAS do lançamento',roas?nf2.format(roas)+'x':'—',`<span>${brl(metaRev+gRev)} em vendas / ${brl(lanSpend)} de mídia</span>`)}
-      ${kpi('Custo por pedido (pago)',cpa?brl(cpa):'—',`<span>Meta + Google</span>`)}
-      ${kpi('Conversão de equilíbrio',pct(breakEvenConv),`<span>mínimo p/ a mídia se pagar · premissa ${pct(V.site_conv_paid)}</span>`)}
-      ${kpi('CPC atual (Meta)',brl(cpc),`<span>${metaOK?'dos últimos '+(PROJ.base==='all'?'dias':PROJ.base+' dias'):'padrão'}</span>`)}
-    </div></div>
-  <div class="section-title">Fase 1 · Pré-lançamento <span>até ${dmy(pre.fim)} · Meta ${brl(pre.meta_ads)} · investido ${brl(preSpent)} · ${preDaysLeft} dias restantes</span></div>
-  <div class="grid kpis">
-    ${kpi('Lista VIP hoje',num(listNow),`<span>${nf1.format(orgLeadsDay)}/dia orgânico · ${R.cadastros?nf1.format(R.cadastros*100)+' por R$ 100 pago':'sem dado pago'}</span>`)}
-    ${kpi(`Lista VIP em ${dmy(vipDate)}`,num(listProj),`<span>meta ${num((S.config.metas||{}).leads_vip||0)}</span>`)}
-    ${kpi('Seguidores hoje',num(followersNow),`<span>${igDay!==null?nf1.format(igDay)+'/dia (média da API, período-base)':'sem dado da API'}</span>`)}
-    ${kpi(`Seguidores em ${dmy(openDate)}`,num(followersProj),`<span>+ ${num(preRemain*R.follows*m)} do pago restante</span>`)}
+    ${ec?'':'<div class="ins info" style="margin-top:8px"><i></i><div><b>Dica:</b> abra a aba <b>Analytics → E-commerce</b> primeiro para carregar os dados reais do GA4. As taxas de conversão da loja ficam mais precisas aqui.</div></div>'}
   </div>
-  <div class="section-title">Fase 2 · ${dmy(vipDate)} · Venda para a lista VIP</div>
+
+  <div class="section-title">Verba de mídia</div>
   <div class="grid kpis">
-    ${kpi('Lista no dia',num(listProj),'')}
-    ${kpi('Conversão da lista',pct(V.vip_conv*m),`<span>premissa · ref. lista VIP de moda: 5–12%</span>`)}
-    ${kpi('Pedidos',num(vipOrders),'')}
-    ${kpi('Receita do VIP day',brl(vipRev),`<span>sem mídia — é o retorno do pré-lançamento</span>`)}
+    ${kpi(`${esc(pre.nome||'Pré-lançamento')}`,brl(pre.meta_ads),`<span>${brl(preSpent)} investido · ${brl(preRemain)} restante · ${preDaysLeft} dias</span>`)}
+    ${kpi(`${esc(lan.nome||'Lançamento')}`,brl(lan.meta_ads+(lan.google_ads||0)),`<span>${brl(lanSpent)} investido · ${brl(lanRemain+(lan.google_ads||0))} restante · ${lanDaysLeft} dias</span>`)}
+    ${kpi('CPC do link (média)',brl(cpc),`<span>média dos últimos ${PROJ.base==='all'?'dias':PROJ.base+' dias'} · ${metaOK?nf1.format(R.link_clicks)+' cliques por R$ pago':'padrão'}</span>`)}
+    ${kpi('Verba restante total',brl(totalRemain),`<span>Meta Ads (pré + lançamento)</span>`)}
   </div>
-  <div class="section-title">Fase 3 · Lançamento ${dmy(lan.inicio)}–${dmy(lan.fim)} <span>${lanDays} dias · Meta ${brl(lan.meta_ads)} + Google ${brl(lan.google_ads||0)}${lanSpent?' · investido '+brl(lanSpent):''}</span></div>
+
+  <div class="section-title">Métricas de marca · Instagram <span>base das últimas ${PROJ.base==='all'?'semanas':PROJ.base+' dias'} + verba restante</span></div>
+  <div class="grid kpis">
+    ${kpi('Seguidores hoje',num(followersNow),`<span>${igDay!==null?nf1.format(igDay)+'/dia (média da API)':'conecte IG_TOKEN para dado real'}</span>`)}
+    ${kpi('Seguidores no fim do lançamento',num(followersNow+projFollows),`<span>+${num(projFollows)} projetados · pago + orgânico</span>`)}
+    ${kpi('Visitas ao perfil (média/dia)',pvDay!==null?nf1.format(pvDay):'—',`<span>${pvDay!==null?num(pvDay*lanDaysLeft)+' projetadas no lançamento':'sem dado da API'}</span>`)}
+    ${kpi('Custo por seguidor (ref.)',R.follows?brl(1/R.follows):'—',`<span>referência para campanhas de seguidores no pago</span>`)}
+  </div>
+
+  <div class="section-title">Clube CASU <span>cadastros, grupo e projeção</span></div>
+  <div class="grid kpis">
+    ${kpi('Clube CASU hoje',num(clubeLeads.length),`<span>${num(clubeInGroup)} no grupo · ${clubeLeads.length?pct(clubeInGroup/clubeLeads.length*100):'—'}</span>`)}
+    ${kpi('Clube CASU no fim do lançamento',num(clubeLeads.length+projCadastros+orgLeadsDay*lanDaysLeft*m),`<span>+${num(projCadastros+orgLeadsDay*lanDaysLeft*m)} projetados</span>`)}
+    ${kpi('Grupo VIP (pré-lançamento, histórico)',num(vipLeads.length),`<span>${num(vipInGroup)} entraram no grupo · ${vipLeads.length?pct(vipInGroup/vipLeads.length*100):'—'}</span>`)}
+    ${kpi('Custo por cadastro (atual)',B.cpl?brl(B.cpl):(R.cadastros?brl(1/R.cadastros):'—'),`<span>média do período-base</span>`)}
+  </div>
+
+  <div class="section-title">Funil do e-commerce · projetado para o lançamento <span>a partir da verba restante + sessões orgânicas · base: ${ec?'<b>taxas reais do GA4</b>':'premissas editáveis'}</span></div>
   <div class="grid cols-2" style="grid-template-columns:3fr 2fr">
-    <div class="card"><table class="big-table"><thead><tr><th>Origem</th><th class="num">Verba</th><th class="num">Sessões</th><th class="num">Conv.</th><th class="num">Pedidos</th><th class="num">Receita</th><th class="num">ROAS</th></tr></thead><tbody>
-      <tr><td>Meta Ads</td><td class="num">${brl(lan.meta_ads)}</td><td class="num">${num(metaSess)}</td><td class="num">${pct(V.site_conv_paid*m)}</td><td class="num"><b>${num(metaOrders)}</b></td><td class="num"><b>${brl(metaRev)}</b></td><td class="num">${lan.meta_ads?nf2.format(metaRev/lan.meta_ads)+'x':'—'}</td></tr>
-      <tr><td>Google Ads</td><td class="num">${brl(lan.google_ads||0)}</td><td class="num">${num(gSess)}</td><td class="num">${pct(V.site_conv_paid*m)}</td><td class="num"><b>${num(gOrders)}</b></td><td class="num"><b>${brl(gRev)}</b></td><td class="num">${lan.google_ads?nf2.format(gRev/lan.google_ads)+'x':'—'}</td></tr>
-      <tr><td>Orgânico + lista + seguidores</td><td class="num">—</td><td class="num">${num(orgSess)}</td><td class="num">${pct(V.site_conv_org*m)}</td><td class="num"><b>${num(orgOrders)}</b></td><td class="num"><b>${brl(orgRev)}</b></td><td class="num">—</td></tr>
-      <tr style="background:#FBF8F5"><td><b>Total lançamento</b></td><td class="num">${brl(lanSpend)}</td><td class="num">${num(metaSess+gSess+orgSess)}</td><td class="num"></td><td class="num"><b>${num(lanOrders)}</b></td><td class="num"><b>${brl(lanRev)}</b></td><td class="num">${roas?nf2.format(roas)+'x':'—'}</td></tr>
-    </tbody></table><div class="note">Sessões pagas = verba ÷ CPC × ${V.click_to_session}% (cliques que viram sessão). Orgânico = ${V.org_sessions_day} sessões/dia × ${lanDays} dias${realSessDay!==null?` — a loja está fazendo ${nf1.format(realSessDay)}/dia agora`:''}.</div></div>
-    <div class="card"><h3>Receita por origem</h3><div class="sub">VIP day + lançamento</div><div class="chart-wrap short"><canvas id="c-proj1"></canvas></div></div>
+    <div class="card">
+      <h3>Jornada estimada até o fim do lançamento (${dmy(lan.fim)})</h3>
+      <div class="sub">Cada etapa aplica a taxa de conversão sobre a etapa anterior</div>
+      ${(()=>{ const steps=[
+        {k:'Usuários',v:projUsers,base:null},
+        {k:'Sessões',v:projSessTot,base:null,note:`${num(projSessPaid)} pagas (${brl(lanRemain)} restante ÷ CPC × ${V.click_to_session}%) · ${num(projSessOrg)} orgânicas (${V.org_sessions_day}/dia)`},
+        {k:'Adicionaram ao carrinho',v:projCarts,base:projSessTot,note:`${pct(sess2cart)} das sessões${ec?' <b>(real do GA4)</b>':' (premissa)'}`},
+        {k:'Iniciaram pagamento',v:projCheckout,base:projCarts,note:`${pct(cart2chk)} de quem adicionou (premissa)`},
+        {k:'Compraram',v:projBuys,base:projCheckout,note:`${pct(chk2buy)} de quem iniciou (premissa)`}
+      ]; const top=steps[1].v||1;
+      return `<div class="bar-list">${steps.map((s,i)=>{const w=(s.v||0)/top*100; const conv=s.base?(s.v||0)/s.base*100:null; return `<div class="row" style="grid-template-columns:1fr 2fr 130px"><span><b>${s.k}</b>${s.note?`<span class="note" style="margin:0;display:block">${s.note}</span>`:''}${conv!==null&&!s.note?`<span class="note" style="margin:0;display:block">${pct(conv)} do passo anterior</span>`:''}</span><div class="bar"><i style="width:${Math.max(w,2)}%"></i></div><span class="num"><b>${num(s.v)}</b></span></div>`}).join('')}</div>`;})()}
+    </div>
+    <div class="card">
+      <h3>Dados reais da loja (período-base)</h3>
+      <div class="sub">GA4 Vista Casu · ${dmy(baseP.from)}–${dmy(baseP.to)}</div>
+      ${ec?`<div class="bar-list">
+        <div class="row" style="grid-template-columns:1fr 110px"><span><b>Sessões/dia (média)</b></span><span class="num">${realSessDay?nf1.format(realSessDay):'—'}</span></div>
+        <div class="row" style="grid-template-columns:1fr 110px"><span><b>Taxa sessão → add carrinho</b></span><span class="num">${realCartRate!==null?pct(realCartRate):'—'}</span></div>
+        <div class="row" style="grid-template-columns:1fr 110px"><span><b>Taxa sessão → compra</b></span><span class="num">${realBuyRate!==null?pct(realBuyRate):'—'}</span></div>
+        <div class="row" style="grid-template-columns:1fr 110px"><span><b>Ticket médio</b></span><span class="num">${realTicket?brl(realTicket):'—'}</span></div>
+      </div><div class="note">Quando essas taxas estabilizarem, use-as como premissas abaixo.</div>`:`<div class="note">Sem dados reais do e-commerce ainda. Abra a aba <b>Analytics → E-commerce</b> uma vez para carregá-los.</div>`}
+    </div>
   </div>
-  ${realConv!==null?`<div class="ins info" style="margin-top:14px"><i></i><div><b>Loja já com dados no GA4:</b> conversão real de ${pct(realConv)} e ticket de ${realTicket?brl(realTicket):'—'} no período-base. Quando isso ficar estável, atualize as premissas abaixo.</div></div>`:''}
-  <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Premissas</h3><div class="sub">Ajuste e salve — vale para toda a equipe. O cenário multiplica as taxas de conversão.</div></div></div>
+
+  <div class="card" style="margin-top:14px"><div class="card-head"><div><h3>Premissas</h3><div class="sub">Ajuste e salve — vale para toda a equipe. O cenário multiplica as taxas de conversão. Taxas reais do GA4 têm prioridade sobre a premissa de sessão→carrinho quando disponíveis.</div></div></div>
     <div class="proj-input" style="margin-top:10px">
-      <div class="field"><label>Ticket médio (R$)</label><input type="number" id="v-ticket" value="${V.ticket}"></div>
-      <div class="field"><label>Conversão da lista VIP (%)</label><input type="number" step="0.5" id="v-vip" value="${V.vip_conv}"></div>
-      <div class="field"><label>Conversão site · tráfego pago (%)</label><input type="number" step="0.1" id="v-cp" value="${V.site_conv_paid}"></div>
-      <div class="field"><label>Conversão site · orgânico (%)</label><input type="number" step="0.1" id="v-co" value="${V.site_conv_org}"></div>
-      <div class="field"><label>CPC Google (R$)</label><input type="number" step="0.1" id="v-gcpc" value="${V.gads_cpc}"></div>
-      <div class="field"><label>Cliques que viram sessão (%)</label><input type="number" id="v-cts" value="${V.click_to_session}"></div>
+      <div class="field"><label>Cliques que viram sessão (%)</label><input type="number" step="1" id="v-cts" value="${V.click_to_session}"></div>
+      <div class="field"><label>Taxa sessão → add carrinho (%)</label><input type="number" step="0.1" id="v-s2cart" value="${V.s2cart}"></div>
+      <div class="field"><label>Taxa add → checkout (%)</label><input type="number" step="1" id="v-c2chk" value="${V.cart2checkout}"></div>
+      <div class="field"><label>Taxa checkout → compra (%)</label><input type="number" step="1" id="v-chk2b" value="${V.checkout2buy}"></div>
+      <div class="field"><label>CPC Google Ads (R$)</label><input type="number" step="0.1" id="v-gcpc" value="${V.gads_cpc}"></div>
       <div class="field"><label>Sessões orgânicas/dia na loja</label><input type="number" id="v-org" value="${V.org_sessions_day}"></div>
-      <div class="field"><label>Meta de faturamento (R$)</label><input type="number" id="v-meta" value="${V.meta_fat}"></div>
       ${fases.map((f,i)=>`<div class="field"><label>${esc(f.nome)} · Meta (R$)</label><input type="number" data-f="${i}" data-k="meta_ads" value="${f.meta_ads}"></div><div class="field"><label>${esc(f.nome)} · Google (R$)</label><input type="number" data-f="${i}" data-k="google_ads" value="${f.google_ads||0}"></div>`).join('')}
-      <div class="field"><label>Meta de cadastros VIP</label><input type="number" id="proj-meta" value="${(S.config.metas||{}).leads_vip||0}"></div>
+      <div class="field"><label>Meta de cadastros no Clube</label><input type="number" id="proj-meta" value="${(S.config.metas||{}).leads_vip||0}"></div>
     </div><div style="margin-top:12px"><button class="btn sm" id="proj-save">Salvar premissas</button></div></div>`;
-  lineBar('c-proj1',['VIP day','Meta Ads','Google Ads','Orgânico'],[{label:'Receita',data:[vipRev,metaRev,gRev,orgRev]}],{money:true});
   $('#proj-base').onclick=e=>{const b=e.target.closest('button');if(b){PROJ.base=b.dataset.b;renderProj();}};
   $('#proj-scen').onclick=e=>{const b=e.target.closest('button');if(b){PROJ.scen=+b.dataset.s;renderProj();}};
-  ['v-ticket','v-vip','v-cp','v-co','v-gcpc','v-cts','v-org','v-meta'].forEach(id=>$('#'+id).onchange=()=>{ S.config.vendas=readVend(); renderProj(); });
-  function readVend(){ return {ticket:+$('#v-ticket').value||0,vip_conv:+$('#v-vip').value||0,site_conv_paid:+$('#v-cp').value||0,site_conv_org:+$('#v-co').value||0,gads_cpc:+$('#v-gcpc').value||1,click_to_session:+$('#v-cts').value||85,org_sessions_day:+$('#v-org').value||0,meta_fat:+$('#v-meta').value||0}; }
+  ['v-cts','v-s2cart','v-c2chk','v-chk2b','v-gcpc','v-org'].forEach(id=>$('#'+id).onchange=()=>{ S.config.vendas=readVend(); renderProj(); });
+  function readVend(){ return {click_to_session:+$('#v-cts').value||85,s2cart:+$('#v-s2cart').value||1.5,cart2checkout:+$('#v-c2chk').value||40,checkout2buy:+$('#v-chk2b').value||50,gads_cpc:+$('#v-gcpc').value||1,org_sessions_day:+$('#v-org').value||0}; }
   $('#proj-save').onclick=async()=>{ const nf=fases.map(f=>({...f})); $$('#tab-proj .proj-input input[data-f]').forEach(i=>{nf[+i.dataset.f][i.dataset.k]=+i.value;}); const metas={...(S.config.metas||{}),leads_vip:+$('#proj-meta').value||0}; const vendas=readVend();
     const {error}=await sb.from('config').upsert([{chave:'fases',valor:nf},{chave:'metas',valor:metas},{chave:'vendas',valor:vendas}]); if(error) return toast('Erro ao salvar: '+error.message); S.config.fases=nf; S.config.metas=metas; S.config.vendas=vendas; toast('Premissas salvas'); renderProj(); };
 }
